@@ -1,0 +1,81 @@
+artifact_id: "UC-01"
+artifact_type: "UseCaseModelArtifact"
+iteration: 1
+created_by: "ReqAgent"
+created_at: "2024-07-25T15:00:00Z"
+source_artifact_ids: []
+status: "draft"
+summary: "A simple client-side lotto number generation application built with pure HTML and JavaScript."
+instructions_for_next_agent: |
+  아래 use case, acceptance criteria, scope, constraints를 기준으로
+  UseCaseModelArtifact를 검증하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+raw_user_request: |
+  build simple lotto app by pure html & javascript
+
+user_story:
+  as_a: "User"
+  i_want: "to generate simple lotto numbers"
+  so_that: "I can use a basic lotto application directly in my web browser using pure HTML and JavaScript"
+
+decomposition_basis:
+  primary_user_intentions:
+    - "Generate unique lottery numbers"
+    - "Display generated lottery numbers"
+  separated_failure_modes:
+    - "Generating incorrect number of numbers"
+    - "Generating non-unique numbers"
+    - "Generating numbers outside the specified range"
+  e2e_test_units:
+    - "Clicking a button to generate numbers and seeing a correct set of numbers displayed"
+
+use_cases:
+  - use_case_id: "UC-01-01"
+    name: "Generate Lotto Numbers"
+    primary_intent: "User generates a set of lottery numbers"
+    goal: "The user can generate and view 6 unique lottery numbers between 1 and 45."
+    actors:
+      - "User"
+    preconditions:
+      - "The lotto application (index.html) is loaded in a web browser."
+    trigger: "The user clicks the 'Generate Lotto Numbers' button."
+    observable_outcome: "A set of 6 unique lottery numbers (1-45) is displayed on the screen."
+    main_flow:
+      - "The user opens the `index.html` file in a web browser."
+      - "The application displays a button, e.g., 'Generate Lotto Numbers'."
+      - "The user clicks the 'Generate Lotto Numbers' button."
+      - "The application generates 6 unique random numbers between 1 and 45 (inclusive)."
+      - "The application displays the generated numbers on the web page."
+    alternate_flows: []
+    acceptance_criteria:
+      - "The application must display a button for generating lotto numbers."
+      - "Clicking the 'Generate Lotto Numbers' button must generate exactly 6 numbers."
+      - "All generated numbers must be unique."
+      - "All generated numbers must be within the range of 1 to 45 (inclusive)."
+      - "The generated numbers must be clearly displayed on the web page."
+
+scope:
+  in_scope:
+    - "Generate 6 unique random numbers between 1 and 45."
+    - "Display the generated numbers on a web page."
+    - "User interaction via a button click to trigger number generation."
+    - "Use of pure HTML and JavaScript."
+  out_of_scope:
+    - "Saving or storing generated numbers (e.g., history, database)."
+    - "Advanced styling or complex UI/UX (e.g., animations, custom themes)."
+    - "User accounts or authentication."
+    - "Backend integration or server-side logic."
+    - "Choosing the number of lotto numbers or the range."
+    - "Any third-party libraries or frameworks (e.g., React, Vue, jQuery)."
+
+constraints:
+  - "The application must be implemented using only pure HTML and JavaScript."
+  - "The application must run entirely client-side in a web browser."
+
+test_focus:
+  - "Verification of exact number count (6 numbers)."
+  - "Verification of number uniqueness."
+  - "Verification of number range (1-45)."
+  - "Verification of button click functionality."
+  - "Verification that generated numbers are visibly displayed."

@@ -1,0 +1,109 @@
+artifact_id: "TD-01"
+artifact_type: "TestDesignArtifact"
+iteration: 1
+created_by: "TestAgent"
+created_at: "2024-07-25T15:05:00Z"
+source_artifact_ids:
+  - "UC-01"
+status: "draft"
+summary: "Test design for the simple client-side lotto number generation application, covering button presence, number generation quantity, uniqueness, range, and display."
+instructions_for_next_agent: |
+  TestDesignArtifact를 검증하라.
+  coverage completeness, scenario quality, evidence type 정의를 확인하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+test_design_scope:
+  use_case_ids:
+    - "UC-01-01"
+
+coverage_plan:
+  acceptance_criteria:
+    - item: "The application must display a button for generating lotto numbers."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "Clicking the 'Generate Lotto Numbers' button must generate exactly 6 numbers."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "All generated numbers must be unique."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "All generated numbers must be within the range of 1 to 45 (inclusive)."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "The generated numbers must be clearly displayed on the web page."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+  main_flow_steps:
+    - item: "The user opens the `index.html` file in a web browser."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "The application displays a button, e.g., 'Generate Lotto Numbers'."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "The user clicks the 'Generate Lotto Numbers' button."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "The application generates 6 unique random numbers between 1 and 45 (inclusive)."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "The application displays the generated numbers on the web page."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+  preconditions:
+    - item: "The lotto application (index.html) is loaded in a web browser."
+      covered_by_scenarios:
+        - "TS-01-01"
+  triggers:
+    - item: "The user clicks the 'Generate Lotto Numbers' button."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+  observable_outcomes:
+    - item: "A set of 6 unique lottery numbers (1-45) is displayed on the screen."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+
+test_scenarios:
+  - scenario_id: "TS-01-01"
+    related_use_case_id: "UC-01-01"
+    purpose: "Verify the initial application load and the presence of the 'Generate Lotto Numbers' button."
+    setup: "The `index.html` file is opened in a web browser."
+    action: "Observe the web page."
+    expected_result: "The web page loads successfully, and a button labeled 'Generate Lotto Numbers' is clearly visible."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-02"
+    related_use_case_id: "UC-01-01"
+    purpose: "Verify that clicking the button generates 6 unique numbers within the 1-45 range, and they are displayed."
+    setup: "The lotto application (index.html) is loaded in a web browser, and the 'Generate Lotto Numbers' button is visible."
+    action: "Click the 'Generate Lotto Numbers' button once."
+    expected_result: "Exactly 6 numbers are displayed. All displayed numbers are unique, within the range of 1 to 45 (inclusive), and clearly visible on the page."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-03"
+    related_use_case_id: "UC-01-01"
+    purpose: "Verify consistent behavior when generating numbers multiple times."
+    setup: "The lotto application (index.html) is loaded in a web browser, and numbers have been generated at least once."
+    action: "Click the 'Generate Lotto Numbers' button two more times."
+    expected_result: "Each click generates a new set of exactly 6 numbers. For each set, all numbers are unique, within the range of 1 to 45 (inclusive), and clearly visible on the page. The displayed numbers update correctly with each click."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+
+coverage_summary:
+  uncovered_items:
+    - "N/A - All specified acceptance criteria, main flow steps, preconditions, triggers, and observable outcomes are covered."
+  design_notes:
+    - "Emphasis is placed on runtime verification for all scenarios due to the client-side, UI-centric nature of the application."
+    - "Multiple generation scenario (TS-01-03) is included to ensure consistent functionality and rule adherence over repeated use."
+[TestAgent] TestDesignArtifact 작성을 완료했습니다. 다음은 ValidatorAgent가 이 아티팩트를 검증할 차례입니다.

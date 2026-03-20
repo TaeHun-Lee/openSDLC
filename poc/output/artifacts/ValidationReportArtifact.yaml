@@ -1,0 +1,116 @@
+artifact_id: "TEST-01-VAL-01"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2024-07-25T15:15:05Z"
+source_artifact_ids:
+  - "TEST-01"
+status: "feedback-required"
+summary: "TestReportArtifact 'TEST-01' failed validation due to a critical inconsistency between reported test cases and overall requirement coverage, making the satisfaction score unreliable."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TEST-01"
+validated_artifact_type: "TestReportArtifact"
+validated_stage: "TEST-EXECUTION"
+validation_attempt: 1
+validation_result: "fail"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "All required fields are present and correctly formatted according to TestReportArtifact schema."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "source_artifact_ids ['UC-01', 'TD-01', 'IMPL-01'] are present and correctly formatted."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent did not attempt to perform tasks outside its role (e.g., code implementation, direct feedback to ReqAgent)."
+  - check_name: "test_design_traceability"
+    result: "pass"
+    evidence: "Each test case links to a use case ID and a test scenario ID (e.g., TC-01-01 -> UC-01-01, TS-01-01)."
+  - check_name: "scenario_execution_completeness"
+    result: "fail"
+    evidence: "The `test_results` section details 3 test cases. However, `requirement_coverage` states `total_acceptance_criteria: 5` and `passed: 5`, implying 2 acceptance criteria are covered and passed without corresponding detailed test cases in the report."
+  - check_name: "evidence_quality"
+    result: "pass"
+    evidence: "For the 3 reported test cases, evidence includes specific file paths and line numbers (e.g., `index.html, lines 28-31`, `script.js, lines 10-21`)."
+  - check_name: "evidence_type_consistency"
+    result: "pass"
+    evidence: "All reported test cases use `validation_basis: execution-verified` which is consistent with the provided evidence."
+  - check_name: "defect_quality"
+    result: "pass"
+    evidence: "The `defects` list is empty, which is consistent with all reported `test_results` being 'pass'."
+  - check_name: "score_consistency"
+    result: "fail"
+    evidence: "The `requirement_coverage` (`total_acceptance_criteria: 5`, `passed: 5`, `satisfaction_score: 100`) is inconsistent with the `test_results` section which only details 3 executed test cases. This makes the satisfaction score unreliable."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks: []
+  IMPL:
+    required_checks: []
+  TEST-DESIGN:
+    required_checks: []
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks: []
+
+violations:
+  - rule: "score_consistency"
+    severity: "high"
+    description: "The TestReportArtifact claims `total_acceptance_criteria: 5` and `passed: 5`, resulting in a `satisfaction_score` of 100. However, only 3 specific test cases are detailed in the `test_results` section. This discrepancy makes the reported coverage and score unreliable, as there is no evidence or detail for the remaining 2 acceptance criteria."
+    recommended_action: "The TestAgent must either update the `test_results` section to include all 5 test cases with their respective evidence, or adjust the `requirement_coverage` counts (total, passed, failed) and `satisfaction_score` to accurately reflect the 3 test cases actually detailed in the report."
+  - rule: "scenario_execution_completeness"
+    severity: "high"
+    description: "Assuming `total_acceptance_criteria` is indeed 5, the `test_results` section is incomplete as it only provides details for 3 test cases. The report lacks execution details and evidence for 2 purportedly covered and passed acceptance criteria."
+    recommended_action: "The TestAgent must ensure that the `test_results` section explicitly covers all acceptance criteria that contribute to the `requirement_coverage` summary. If not all criteria were tested, the `requirement_coverage` summary must be adjusted accordingly."
+
+warnings: []
+
+next_action:
+  action: "rework"
+  target_agent: "TestAgent"
+  reason: "The TestReportArtifact 'TEST-01' contains critical inconsistencies between the detailed test results and the overall requirement coverage summary. This compromises the reliability of the test outcome and satisfaction score, requiring the TestAgent to rework the artifact for accuracy and completeness."
+
+blocking_reason: "Inconsistent reporting of test results versus declared requirement coverage and satisfaction score."
+rework_target_artifact_id: "TEST-01"
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."
+[ValidatorAgent] TestReportArtifact `TEST-01` 검증을 완료하고, ValidationReportArtifact `TEST-01-VAL-01`을 생성했습니다. `fail` 판정에 따라 TestAgent는 `TEST-01` 아티팩트를 재작업해야 합니다.
