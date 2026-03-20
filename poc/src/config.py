@@ -2,6 +2,10 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Project root (poc/../)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -17,7 +21,7 @@ LLM_PROVIDER = os.environ.get("OPENSDLC_LLM_PROVIDER", "google")
 
 # Provider API keys
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "AIzaSyBJ95EWbofsMoXa1lD1PNJ74WCw8aro3sk")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY_FILE", "")) 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # Default model per provider (overridden by OPENSDLC_MODEL env var)
