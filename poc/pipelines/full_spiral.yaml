@@ -1,0 +1,48 @@
+name: full-spiral
+description: "Full spiral SDLC pipeline with all validation gates"
+max_iterations: 3
+steps:
+  # Phase 1: Requirements
+  - step: 1
+    agent: ReqAgent
+    model: gemini-2.5-flash
+  - step: 2
+    agent: ValidatorAgent
+    model: gemini-2.5-flash
+    on_fail: ReqAgent
+
+  # Phase 2: Test Design (before implementation)
+  - step: 3
+    agent: TestAgent
+    model: gemini-2.5-flash
+    mode: design
+  - step: 4
+    agent: ValidatorAgent
+    model: gemini-2.5-flash
+    on_fail: TestAgent
+
+  # Phase 3: Implementation
+  - step: 5
+    agent: CodeAgent
+    model: gemini-2.5-flash
+    max_tokens: 16384
+    min_response_chars: 2000
+  - step: 6
+    agent: ValidatorAgent
+    model: gemini-2.5-flash
+    on_fail: CodeAgent
+
+  # Phase 4: Test Execution (after implementation)
+  - step: 7
+    agent: TestAgent
+    model: gemini-2.5-flash
+    mode: execution
+  - step: 8
+    agent: ValidatorAgent
+    model: gemini-2.5-flash
+    on_fail: TestAgent
+
+  # Phase 5: Feedback
+  - step: 9
+    agent: CoordAgent
+    model: gemini-2.5-flash

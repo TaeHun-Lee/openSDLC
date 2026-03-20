@@ -1,0 +1,75 @@
+artifact_id: "UC-01"
+artifact_type: "UseCaseModelArtifact"
+iteration: 0
+created_by: "ReqAgent"
+created_at: "2024-07-30T10:00:00Z"
+source_artifact_ids: []
+status: "draft"
+summary: "단순 로또 앱의 Use Case 모델 정의: 1부터 45까지의 유일한 로또 번호 6개 생성 및 표시 기능을 정의합니다."
+instructions_for_next_agent: |
+  아래 use case, acceptance criteria, scope, constraints를 기준으로
+  UseCaseModelArtifact를 검증하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+raw_user_request: |
+  build simple lotto app
+
+user_story:
+  as_a: "User"
+  i_want: "to get a set of lotto numbers"
+  so_that: "I can use them to play lotto"
+
+decomposition_basis:
+  primary_user_intentions:
+    - "Generate a set of unique lotto numbers."
+  separated_failure_modes:
+    - "Failure to generate unique numbers."
+    - "Failure to generate numbers within the specified range (1-45)."
+    - "Failure to generate the correct count of numbers (6)."
+  e2e_test_units:
+    - "Generate and display a valid set of lotto numbers."
+
+use_cases:
+  - use_case_id: "UC-01-01"
+    name: "Generate and Display Lotto Numbers"
+    primary_intent: "Provide the user with a set of lotto numbers."
+    goal: "The system shall generate a unique set of 6 lotto numbers between 1 and 45 and display them to the user."
+    actors:
+      - "User"
+    preconditions:
+      - "The lotto application is running."
+    trigger: "The user launches the lotto application."
+    observable_outcome: "A set of 6 unique numbers between 1 and 45 is displayed to the user."
+    main_flow:
+      - "The user launches the lotto application."
+      - "The system generates 6 unique random numbers between 1 and 45."
+      - "The system displays the generated numbers to the user."
+    alternate_flows:
+      - "If during generation a non-unique number is selected, the system re-generates a new number until 6 unique numbers are obtained."
+    acceptance_criteria:
+      - "The application displays exactly 6 numbers."
+      - "All displayed numbers are unique."
+      - "All displayed numbers are within the range of 1 to 45 (inclusive)."
+
+scope:
+  in_scope:
+    - "Generation of 6 unique random numbers between 1 and 45."
+    - "Displaying the generated numbers to the user."
+  out_of_scope:
+    - "User input for number selection."
+    - "Saving or persisting generated numbers."
+    - "Checking winning numbers or past draw results."
+    - "Any complex UI/UX beyond basic textual display."
+    - "Support for different lotto rules (e.g., number count, range other than 1-45)."
+    - "Network communication or API calls."
+
+constraints:
+  - "Generated numbers must be integers."
+  - "Generated numbers must be unique within the set."
+  - "Generated numbers must be between 1 and 45 (inclusive)."
+  - "Exactly 6 numbers must be generated."
+
+test_focus:
+  - "Number uniqueness validation."
+  - "Number range validation (1-45 inclusive)."
+  - "Correct count of generated numbers (exactly 6)."

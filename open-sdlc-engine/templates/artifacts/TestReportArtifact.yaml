@@ -1,0 +1,60 @@
+artifact_id: "TEST-{{id}}"
+artifact_type: "TestReportArtifact"
+iteration: {{iteration}}
+created_by: "TestAgent"
+created_at: "{{timestamp}}"
+source_artifact_ids:
+  - "UC-{{source_usecase_id}}"
+  - "TD-{{source_test_design_id}}"
+  - "IMPL-{{source_impl_id}}"
+status: "actionable"
+summary: "{{this_artifact_summary}}"
+instructions_for_next_agent: |
+  TestReportArtifact를 검증하고
+  TestDesignArtifact 추적성, scenario 실행 여부, evidence, 결함 구조, 만족도 계산의 일관성을 확인하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+test_scope:
+  use_case_ids:
+    - "UC-{{source_usecase_id}}-01"
+  test_design_id: "TD-{{source_test_design_id}}"
+
+test_results:
+  - test_case_id: "TC-{{id}}-01"
+    related_use_case_id: "UC-{{source_usecase_id}}-01"
+    related_test_scenario_id: "TS-{{source_test_design_id}}-01"
+    related_acceptance_criteria: "{{acceptance_criteria_1}}"
+    validation_basis: "{{code_or_execution_or_mixed}}"
+    result: "pass"
+    evidence: "{{evidence_1}}"
+
+  - test_case_id: "TC-{{id}}-02"
+    related_use_case_id: "UC-{{source_usecase_id}}-01"
+    related_test_scenario_id: "TS-{{source_test_design_id}}-02"
+    related_acceptance_criteria: "{{acceptance_criteria_2}}"
+    validation_basis: "{{code_or_execution_or_mixed}}"
+    result: "fail"
+    evidence: "{{evidence_2}}"
+
+defects:
+  - defect_id: "DEF-{{id}}-01"
+    severity: "{{low_or_medium_or_high}}"
+    related_use_case_id: "UC-{{source_usecase_id}}-01"
+    description: "{{defect_description}}"
+    recommended_fix: "{{recommended_fix}}"
+
+improvements:
+  - "{{improvement_1}}"
+  - "{{improvement_2}}"
+
+requirement_coverage:
+  total_acceptance_criteria: {{total_count}}
+  passed: {{passed_count}}
+  failed: {{failed_count}}
+  satisfaction_score: {{score_0_to_100}}
+
+test_summary:
+  overall_result: "{{pass_or_partial_or_fail}}"
+  key_findings:
+    - "{{key_finding_1}}"
+    - "{{key_finding_2}}"
