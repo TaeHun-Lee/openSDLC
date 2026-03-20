@@ -1,0 +1,177 @@
+artifact_id: "IMPL-01"
+artifact_type: "ImplementationArtifact"
+iteration: 1
+created_by: "CodeAgent"
+created_at: "2024-07-29T12:00:02Z"
+source_artifact_ids:
+  - "UC-01"
+  - "TD-01"
+status: "implemented"
+summary: "순수 HTML과 JavaScript를 사용하여 1~45 범위의 고유한 로또 번호 6개를 생성하고 웹 페이지에 표시하는 기능이 구현되었습니다."
+instructions_for_next_agent: |
+  UseCaseModelArtifact, TestDesignArtifact와 ImplementationArtifact를 기준으로
+  구현 결과를 검증하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+implementation_target:
+  use_case_ids:
+    - "UC-01-01"
+  test_design_id: "TD-01"
+
+implemented_features:
+  - "로또 번호 생성 버튼 표시"
+  - "버튼 클릭 시 1~45 범위의 고유한 6개 로또 번호 생성"
+  - "생성된 로또 번호를 웹 페이지에 시각적으로 표시"
+
+files_changed:
+  - "workspace/LottoApp/index.html"
+  - "workspace/LottoApp/style.css"
+  - "workspace/LottoApp/script.js"
+
+runtime_info:
+  entrypoint: "웹 브라우저에서 'workspace/LottoApp/index.html' 파일을 엽니다."
+  test_url: "file:///{PROJECT_ROOT}/workspace/LottoApp/index.html"
+
+known_limitations:
+  - "생성된 로또 번호 저장 기능 (로컬 스토리지, 서버 저장 등)은 구현되지 않았습니다."
+  - "당첨 번호 비교 및 당첨 여부 확인 기능은 구현되지 않았습니다."
+  - "고급 UI/UX 디자인이나 애니메이션은 포함되지 않았습니다."
+  - "사용자로부터 번호 범위나 개수를 입력받는 기능은 구현되지 않았습니다."
+  - "반응형 웹 디자인은 적용되지 않았습니다."
+
+traceability:
+  - use_case_id: "UC-01-01"
+    test_scenario_ids:
+      - "TS-01-01"
+    implemented_by:
+      - "workspace/LottoApp/index.html: HTML 구조 및 버튼, 번호 표시 영역"
+      - "workspace/LottoApp/script.js: generateLottoNumbers() 함수 (로또 번호 생성 로직)"
+      - "workspace/LottoApp/script.js: displayLottoNumbers() 함수 (생성된 번호 표시 로직)"
+      - "workspace/LottoApp/script.js: 이벤트 리스너 (버튼 클릭 처리)"
+      - "workspace/LottoApp/style.css: 로또 번호 및 버튼 스타일링"
+
+implementation_notes:
+  - "로또 번호는 `Set` 객체를 사용하여 중복 없이 고유한 6개의 숫자를 보장했습니다."
+  - "번호 범위(1~45)는 `Math.random()`과 `Math.floor()`를 조합하여 구현했습니다."
+  - "클라이언트 사이드 스크립트만을 사용하여 외부 라이브러리 없이 순수 JavaScript로 구현했습니다."
+
+code_files:
+  - path: "workspace/LottoApp/index.html"
+    language: "html"
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Lotto Number Generator</title>
+          <link rel="stylesheet" href="style.css">
+      </head>
+      <body>
+          <h1>Lotto Number Generator</h1>
+          <button id="generateLottoBtn">번호 생성</button>
+          <div id="lottoNumbers"></div>
+          <script src="script.js"></script>
+      </body>
+      </html>
+
+  - path: "workspace/LottoApp/style.css"
+    language: "css"
+    content: |
+      body {
+          font-family: Arial, sans-serif;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 100vh;
+          margin: 0;
+          background-color: #f4f4f4;
+          color: #333;
+      }
+
+      h1 {
+          color: #0056b3;
+          margin-bottom: 20px;
+      }
+
+      button {
+          padding: 10px 20px;
+          font-size: 1.1em;
+          background-color: #007bff;
+          color: white;
+          border: none;
+          border-radius: 5px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+          margin-bottom: 30px;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      }
+
+      button:hover {
+          background-color: #0056b3;
+      }
+
+      #lottoNumbers {
+          display: flex;
+          gap: 15px;
+          flex-wrap: wrap;
+          justify-content: center;
+          min-height: 50px; /* To prevent layout shift initially */
+          width: 100%;
+          max-width: 600px; /* Limit width for better readability */
+      }
+
+      .lotto-number {
+          width: 50px;
+          height: 50px;
+          background-color: #f0ad4e;
+          color: white;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.5em;
+          font-weight: bold;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      }
+
+  - path: "workspace/LottoApp/script.js"
+    language: "javascript"
+    content: |
+      document.addEventListener('DOMContentLoaded', () => {
+          const generateBtn = document.getElementById('generateLottoBtn');
+          const lottoNumbersDiv = document.getElementById('lottoNumbers');
+
+          generateBtn.addEventListener('click', () => {
+              const numbers = generateLottoNumbers();
+              displayLottoNumbers(numbers);
+          });
+
+          /**
+           * 1에서 45 사이의 고유한 로또 번호 6개를 생성합니다.
+           * @returns {number[]} 생성된 로또 번호 배열
+           */
+          function generateLottoNumbers() {
+              const lottoSet = new Set();
+              while (lottoSet.size < 6) {
+                  const randomNumber = Math.floor(Math.random() * 45) + 1; // 1부터 45까지
+                  lottoSet.add(randomNumber);
+              }
+              return Array.from(lottoSet).sort((a, b) => a - b); // 오름차순 정렬
+          }
+
+          /**
+           * 생성된 로또 번호를 웹 페이지에 표시합니다.
+           * @param {number[]} numbers - 표시할 로또 번호 배열
+           */
+          function displayLottoNumbers(numbers) {
+              lottoNumbersDiv.innerHTML = ''; // 이전 번호 초기화
+              numbers.forEach(number => {
+                  const numberDiv = document.createElement('div');
+                  numberDiv.classList.add('lotto-number');
+                  numberDiv.textContent = number;
+                  lottoNumbersDiv.appendChild(numberDiv);
+              });
+          }
+      });

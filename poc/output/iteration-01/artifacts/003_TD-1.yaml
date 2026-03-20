@@ -1,0 +1,162 @@
+artifact_id: "TD-1"
+artifact_type: "TestDesignArtifact"
+iteration: 1
+created_by: "TestAgent"
+created_at: "2024-07-30T10:05:00Z"
+source_artifact_ids:
+  - "UC-1"
+status: "draft"
+summary: "순수 HTML과 JavaScript To-Do 앱의 핵심 기능에 대한 테스트 설계 완료."
+instructions_for_next_agent: |
+  TestDesignArtifact를 검증하라.
+  coverage completeness, scenario quality, evidence type 정의를 확인하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+test_design_scope:
+  use_case_ids:
+    - "UC-1-01"
+    - "UC-1-02"
+    - "UC-1-03"
+
+coverage_plan:
+  acceptance_criteria:
+    - item: "사용자가 할 일을 입력하고 '추가' 버튼을 누르면, 해당 할 일이 목록에 표시되어야 한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "할 일이 추가된 후, 입력창은 비워져야 한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "빈 텍스트를 입력하고 '추가'를 누르면, 목록에 아무것도 추가되지 않아야 한다."
+      covered_by_scenarios:
+        - "TS-1-02"
+    - item: "미완료 할 일 항목을 클릭하면, 해당 항목에 취소선 스타일이 적용되어야 한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+    - item: "이미 완료 처리된(취소선이 있는) 항목을 다시 클릭하면, 취소선 스타일이 제거되어야 한다."
+      covered_by_scenarios:
+        - "TS-1-04"
+    - item: "할 일 항목 옆의 '삭제' 버튼을 클릭하면, 해당 항목이 목록에서 즉시 사라져야 한다."
+      covered_by_scenarios:
+        - "TS-1-05"
+  main_flow_steps:
+    - item: "사용자가 텍스트 입력 필드에 할 일 내용을 입력한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "사용자가 '추가' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+        - "TS-1-02"
+    - item: "시스템은 입력된 내용으로 새로운 할 일 항목을 생성하여 목록에 추가한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "시스템은 텍스트 입력 필드를 비운다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "사용자가 목록에서 특정 할 일 항목을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+    - item: "시스템은 해당 항목의 상태를 '완료' 또는 '미완료'로 토글(toggle)한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+    - item: "시스템은 상태에 맞는 시각적 스타일(예: 취소선)을 적용하거나 제거한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+    - item: "사용자가 특정 할 일 항목 옆의 '삭제' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-05"
+    - item: "시스템은 해당 항목을 목록에서 영구적으로 제거한다."
+      covered_by_scenarios:
+        - "TS-1-05"
+  preconditions:
+    - item: "애플리케이션이 브라우저에 로드되어 있다."
+      covered_by_scenarios:
+        - "TS-1-01"
+        - "TS-1-02"
+    - item: "목록에 하나 이상의 할 일이 존재한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+        - "TS-1-05"
+  triggers:
+    - item: "사용자가 할 일 내용을 입력하고 '추가' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "사용자가 할 일 내용을 입력하지 않고 '추가' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-02"
+    - item: "사용자가 목록에 있는 할 일 항목 자체 또는 완료를 의미하는 UI 요소(예: 체크박스)를 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+    - item: "사용자가 할 일 항목 옆의 '삭제' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-1-05"
+  observable_outcomes:
+    - item: "입력 필드는 비워지고, 새로운 할 일 항목이 목록의 끝에 나타난다."
+      covered_by_scenarios:
+        - "TS-1-01"
+    - item: "해당 할 일 항목의 텍스트에 취소선이 그어지는 등 완료 상태임이 시각적으로 표시되거나, 원래대로 돌아온다."
+      covered_by_scenarios:
+        - "TS-1-03"
+        - "TS-1-04"
+    - item: "해당 할 일 항목이 목록에서 사라진다."
+      covered_by_scenarios:
+        - "TS-1-05"
+
+test_scenarios:
+  - scenario_id: "TS-1-01"
+    related_use_case_id: "UC-1-01"
+    purpose: "새로운 할 일 항목이 정상적으로 추가되고 입력 필드가 초기화되는지 검증."
+    setup: "애플리케이션이 브라우저에 로드되어 있고, 할 일 목록과 입력 필드가 준비된 상태."
+    action: "텍스트 입력 필드에 '저녁 식사 준비'를 입력하고 '추가' 버튼을 클릭한다."
+    expected_result: "할 일 목록에 '저녁 식사 준비' 항목이 추가되고, 입력 필드가 비워진다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-1-02"
+    related_use_case_id: "UC-1-01"
+    purpose: "내용 없이 할 일 추가 시도가 무시되는지 검증."
+    setup: "애플리케이션이 브라우저에 로드되어 있고, 할 일 목록과 입력 필드가 준비된 상태."
+    action: "텍스트 입력 필드에 아무것도 입력하지 않고 '추가' 버튼을 클릭한다."
+    expected_result: "할 일 목록에 아무것도 추가되지 않고, 입력 필드의 상태도 변하지 않는다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-1-03"
+    related_use_case_id: "UC-1-02"
+    purpose: "할 일 항목을 클릭하여 완료 상태로 변경되는지 검증."
+    setup: "애플리케이션에 '회의 참석' 할 일 항목이 미완료 상태로 존재한다."
+    action: "'회의 참석' 할 일 항목을 클릭한다."
+    expected_result: "'회의 참석' 항목에 취소선 스타일이 적용되어 완료 상태임을 시각적으로 표시한다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-1-04"
+    related_use_case_id: "UC-1-02"
+    purpose: "완료된 할 일 항목을 다시 클릭하여 미완료 상태로 되돌아오는지 검증."
+    setup: "애플리케이션에 '회의 참석' 할 일 항목이 완료(취소선 적용) 상태로 존재한다."
+    action: "'회의 참석' 할 일 항목을 다시 클릭한다."
+    expected_result: "'회의 참석' 항목의 취소선 스타일이 제거되어 미완료 상태로 되돌아온다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-1-05"
+    related_use_case_id: "UC-1-03"
+    purpose: "할 일 항목 옆의 삭제 버튼을 클릭하여 항목이 정상적으로 제거되는지 검증."
+    setup: "애플리케이션에 '운동하기' 할 일 항목과 해당 항목 옆에 '삭제' 버튼이 존재한다."
+    action: "'운동하기' 항목 옆의 '삭제' 버튼을 클릭한다."
+    expected_result: "'운동하기' 항목이 할 일 목록에서 사라진다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+
+coverage_summary:
+  uncovered_items: []
+  design_notes:
+    - "모든 핵심 기능 (추가, 완료/미완료 토글, 삭제) 및 명시된 대체 흐름 (빈 값 추가)에 대한 시나리오를 설계했다."
+    - "각 시나리오는 UI의 시각적 변화나 목록 상태 변화를 통해 검증 가능하도록 런타임 증거를 요구한다."
+
+[TestAgent] TestDesignArtifact 생성을 완료했습니다. 다음 에이전트는 ValidatorAgent입니다.

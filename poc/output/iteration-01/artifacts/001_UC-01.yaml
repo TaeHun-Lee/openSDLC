@@ -1,0 +1,82 @@
+artifact_id: "UC-01"
+artifact_type: "UseCaseModelArtifact"
+iteration: 1
+created_by: "ReqAgent"
+created_at: "2024-07-29T12:00:00Z"
+source_artifact_ids: []
+status: "draft"
+summary: "단순 로또 번호 생성 및 표시 기능을 제공하는 웹 애플리케이션 요구사항 정의"
+instructions_for_next_agent: |
+  아래 use case, acceptance criteria, scope, constraints를 기준으로
+  UseCaseModelArtifact를 검증하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+raw_user_request: |
+  build simple lotto app by pure html & javascript
+
+user_story:
+  as_a: "사용자"
+  i_want: "순수 HTML과 JavaScript를 사용하여 간단한 로또 앱을 만들고 싶다"
+  so_that: "로또 번호를 생성하고 웹 페이지에서 확인할 수 있다"
+
+decomposition_basis:
+  primary_user_intentions:
+    - "로또 번호 생성"
+    - "생성된 번호 화면 표시"
+  separated_failure_modes:
+    - "유효하지 않은 범위의 번호 생성"
+    - "중복 번호 생성"
+    - "번호가 올바르게 표시되지 않음"
+  e2e_test_units:
+    - "웹 페이지 로드 후 버튼 클릭 시 1~45 범위의 고유한 6개 로또 번호가 생성 및 표시되는지 확인"
+
+use_cases:
+  - use_case_id: "UC-01-01"
+    name: "로또 번호 생성 및 표시"
+    primary_intent: "사용자가 로또 번호를 생성하고 웹 페이지에서 확인한다."
+    goal: "사용자가 '번호 생성' 버튼 클릭 시, 1에서 45 사이의 고유한 6개 로또 번호가 생성되어 웹 페이지에 표시된다."
+    actors:
+      - "사용자"
+    preconditions:
+      - "로또 애플리케이션 웹 페이지가 브라우저에 로드되어 있다."
+    trigger: "사용자가 '번호 생성' 버튼을 클릭한다."
+    observable_outcome: "웹 페이지에 1~45 범위의 고유한 6개 로또 번호가 표시된다."
+    main_flow:
+      - "사용자가 로또 애플리케이션 웹 페이지를 연다."
+      - "웹 페이지에 '번호 생성' 버튼이 표시된다."
+      - "사용자가 '번호 생성' 버튼을 클릭한다."
+      - "애플리케이션은 1에서 45 사이의 겹치지 않는(unique) 6개의 숫자를 생성한다."
+      - "애플리케이션은 생성된 6개의 숫자를 웹 페이지에 표시한다."
+    alternate_flows: []
+    acceptance_criteria:
+      - "웹 페이지는 로또 번호를 생성하기 위한 버튼을 표시해야 한다."
+      - "버튼 클릭 시, 6개의 숫자가 생성되어야 한다."
+      - "생성된 모든 6개의 숫자는 중복되지 않아야 한다."
+      - "생성된 각 숫자는 1에서 45 사이여야 한다 (1과 45 포함)."
+      - "생성된 숫자들은 웹 페이지에 명확하게 표시되어야 한다."
+
+scope:
+  in_scope:
+    - "HTML, CSS, JavaScript만을 사용한 클라이언트 측 애플리케이션 개발."
+    - "1에서 45 사이의 범위에서 6개의 고유한 로또 번호 생성."
+    - "'번호 생성' 버튼 클릭 이벤트 처리."
+    - "생성된 로또 번호를 웹 페이지에 표시."
+  out_of_scope:
+    - "생성된 로또 번호 저장 기능 (예: 로컬 스토리지, 서버 저장)."
+    - "당첨 번호와 비교하거나 당첨 여부를 확인하는 기능."
+    - "고급 UI/UX 디자인, 애니메이션, 복잡한 스타일링."
+    - "서버 사이드 로직 또는 데이터베이스 통합."
+    - "사용자로부터 번호 범위나 개수를 입력받는 기능."
+    - "반응형 웹 디자인 또는 모바일 앱 개발."
+
+constraints:
+  - "클라이언트 사이드에서만 동작하는 애플리케이션이어야 한다."
+  - "오직 순수 HTML, CSS, JavaScript만을 사용해야 하며, 외부 라이브러리/프레임워크(예: jQuery, React, Vue) 사용은 금지된다."
+  - "어떤 형태의 서버 측 컴포넌트도 포함되어서는 안 된다."
+
+test_focus:
+  - "생성된 로또 번호의 개수가 정확히 6개인지 확인."
+  - "생성된 로또 번호들이 모두 고유한 값인지 확인."
+  - "생성된 로또 번호들이 1에서 45 범위 내에 있는지 확인."
+  - "'번호 생성' 버튼이 정상적으로 동작하여 번호를 생성하는지 확인."
+  - "생성된 번호들이 웹 페이지에 올바르게 표시되는지 확인."

@@ -1,0 +1,113 @@
+artifact_id: "IMPL-1-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2024-07-30T10:10:05Z"
+source_artifact_ids:
+  - "IMPL-1"
+status: "approved"
+summary: "ImplementationArtifact(IMPL-1) 검증 통과. 스키마, 추적성, 범위 준수 및 증거의 질이 양호하며, 다음 단계인 테스트 실행으로 진행하기에 적합함."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "IMPL-1"
+validated_artifact_type: "ImplementationArtifact"
+validated_stage: "IMPL"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "아티팩트가 ImplementationArtifact 스키마의 필수 필드(e.g., artifact_id, source_artifact_ids, traceability)를 모두 포함하고 있으며 형식이 올바름."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "상위 아티팩트 `UC-1`, `TD-1`에 대한 참조가 명확함. `traceability` 섹션에서 각 유스케이스 ID(`UC-1-01`, `UC-1-02`, `UC-1-03`)가 구현 코드(e.g., `addTask` 함수)에 정확히 매핑됨."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "CodeAgent가 요구사항 범위를 벗어나는 자의적인 기능을 추가하지 않고 역할 경계를 준수함."
+  - check_name: "scope_adherence"
+    result: "pass"
+    evidence: "구현된 기능(`implemented_features`)이 요약 및 세부 기능 목록과 일치하며, `known_limitations`를 통해 범위가 명확하게 정의됨."
+  - check_name: "implementation_consistency"
+    result: "pass"
+    evidence: "제공된 코드 파일(`index.html`, `css/style.css`, `js/app.js`)의 내용이 `traceability`에 명시된 증거와 일치하며, 코드 간의 참조(e.g., `index.html`에서 `app.js` 호출)가 유효함."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "TestAgent"
+  reason: "구현이 완료되고 검증을 통과하였으므로, TestAgent는 테스트 실행(Execution Mode)을 진행해야 함."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

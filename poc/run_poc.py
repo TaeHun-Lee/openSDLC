@@ -20,23 +20,53 @@ def setup_logging(level: str) -> None:
 
 
 def _save_artifacts(final_state: dict, out_dir: Path) -> None:
-    """Save all artifacts from pipeline state."""
+    """Save all artifacts from pipeline state.
+
+    Artifacts are grouped by iteration into subdirectories:
+        out_dir/iteration-01/artifacts/001_UC-01.yaml
+        out_dir/iteration-01/artifacts/002_UC-01-VAL-1.yaml
+        out_dir/iteration-02/artifacts/001_UC-01.yaml
+        ...
+
+    Each file uses the artifact_id from inside the YAML as its name,
+    prefixed with a sequence number to preserve execution order within
+    the iteration.
+    """
+    from collections import defaultdict
+    from artifacts.parser import extract_artifact_id, extract_iteration
+
     out_dir.mkdir(parents=True, exist_ok=True)
+    steps = final_state.get("steps_completed", [])
+
+    # Group steps by iteration
+    iter_groups: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+    for seq, step_result in enumerate(steps, start=1):
+        yaml_str = step_result.get("artifact_yaml", "")
+        if not yaml_str:
+            continue
+        iteration = extract_iteration(yaml_str)
+        iter_groups[iteration].append((seq, step_result))
+
+    # Save each iteration into its own subdirectory
+    for iteration in sorted(iter_groups):
+        iter_dir = out_dir / f"iteration-{iteration:02d}" / "artifacts"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+
+        for local_seq, (global_seq, step_result) in enumerate(iter_groups[iteration], start=1):
+            yaml_str = step_result["artifact_yaml"]
+            artifact_id = extract_artifact_id(yaml_str)
+            if artifact_id:
+                filename = f"{local_seq:03d}_{artifact_id}.yaml"
+            else:
+                filename = f"{local_seq:03d}_{step_result.get('step_id', 'unknown')}.yaml"
+            (iter_dir / filename).write_text(yaml_str, encoding="utf-8")
+
+        print(f"\n[출력] iteration-{iteration:02d} 아티팩트 저장 완료: {iter_dir}")
+        for f in sorted(iter_dir.glob("*.yaml")):
+            print(f"  - {f.name}")
+
+    # Extract and write executable code files from the latest ImplementationArtifact
     latest = final_state.get("latest_artifacts", {})
-
-    # Save artifact YAMLs
-    artifacts_dir = out_dir / "artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    for artifact_type, yaml_str in latest.items():
-        if yaml_str:
-            filename = f"{artifact_type}.yaml"
-            (artifacts_dir / filename).write_text(yaml_str, encoding="utf-8")
-
-    print(f"\n[출력] 아티팩트 저장 완료: {artifacts_dir}")
-    for f in sorted(artifacts_dir.glob("*.yaml")):
-        print(f"  - {f.name}")
-
-    # Extract and write executable code files from ImplementationArtifact
     impl_yaml = latest.get("ImplementationArtifact", "")
     if impl_yaml:
         from artifacts.code_extractor import write_code_files, get_runtime_info

@@ -1,0 +1,116 @@
+artifact_id: "UC-1-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2024-07-30T10:00:10Z"
+source_artifact_ids:
+  - "UC-1"
+status: "approved"
+summary: "UseCaseModelArtifact(UC-1) 검증 결과, 요구사항의 분해, 범위, 제약 조건이 명확하고 테스트 가능성이 높아 통과 처리합니다. 모든 필수 검증 항목을 만족합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "UC-1"
+validated_artifact_type: "UseCaseModelArtifact"
+validated_stage: "UC"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "아티팩트가 UseCaseModelArtifact 템플릿의 모든 필수 필드를 포함하고 있으며, 구조가 일치합니다."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "최초 아티팩트이므로 source_artifact_ids가 비어 있는 것이 올바른 상태입니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "ReqAgent가 요구사항 정의 역할을 벗어나는 행위(예: 구현 코드 제안)를 하지 않았습니다."
+  - check_name: "scope_clarity"
+    result: "pass"
+    evidence: "in_scope와 out_of_scope 항목이 명확하게 구분되어 있어 작업 범위를 한정하는 데 문제가 없습니다."
+  - check_name: "acceptance_criteria_testability"
+    result: "pass"
+    evidence: "모든 use_case의 acceptance_criteria는 구체적이고 관찰 가능한 결과를 명시하고 있어, 객관적인 테스트가 가능합니다."
+  - check_name: "e2e_decomposition_quality"
+    result: "pass"
+    evidence: "할 일 '추가', '완료 처리', '삭제' 기능이 독립적인 Use Case로 잘 분리되어 있으며, 각 Use Case는 단일 사용자 의도를 반영합니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "TestAgent"
+  reason: "요구사항 명세가 검증을 통과하여, 다음 단계인 테스트 설계로 진행합니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

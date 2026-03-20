@@ -106,6 +106,35 @@ def get_validation_result(validation_report: dict | None, raw_yaml: str = "") ->
     return "fail"
 
 
+def extract_artifact_id(yaml_str: str) -> str | None:
+    """Extract artifact_id from a YAML artifact string.
+
+    Tries regex first (fast), falls back to full YAML parse.
+    Returns None if not found.
+    """
+    m = re.search(r"artifact_id:\s*[\"']?([^\s\"']+)[\"']?", yaml_str)
+    if m:
+        return m.group(1)
+    try:
+        data = yaml.safe_load(yaml_str)
+        if isinstance(data, dict):
+            return data.get("artifact_id")
+    except yaml.YAMLError:
+        pass
+    return None
+
+
+def extract_iteration(yaml_str: str) -> int:
+    """Extract iteration number from a YAML artifact string.
+
+    Returns 1 if not found or not parseable.
+    """
+    m = re.search(r"iteration:\s*(\d+)", yaml_str)
+    if m:
+        return int(m.group(1))
+    return 1
+
+
 def artifact_to_yaml_str(artifact: dict) -> str:
     """Serialize artifact dict back to YAML string."""
     return yaml.dump(artifact, allow_unicode=True, sort_keys=False)

@@ -1,0 +1,59 @@
+artifact_id: "TEST-01-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2024-07-29T12:00:03Z"
+source_artifact_ids:
+  - "TEST-01"
+status: "approved"
+summary: "TestReportArtifact (TEST-01)는 모든 유효성 검사 기준을 충족하며 다음 단계로 진행할 수 있습니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TEST-01"
+validated_artifact_type: "TestReportArtifact"
+validated_stage: "TEST-EXECUTION"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "TestReportArtifact (TEST-01)의 모든 필수 필드가 존재하며 스키마 정의를 준수합니다."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "source_artifact_ids ('UC-01', 'TD-01', 'IMPL-01')가 올바르게 지정되었으며, test_results 내 related_use_case_id ('UC-01-01') 및 related_test_scenario_id ('TS-01-01')가 일관되게 참조됩니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent는 TestReportArtifact의 범위 내에서만 작업했으며, 코드를 직접 구현하거나 ReqAgent의 요구사항 영역을 침범하지 않았습니다. 'improvements' 필드는 TestAgent의 역할 범위 내에서 피드백 목적으로 허용됩니다."
+  - check_name: "test_design_traceability"
+    result: "pass"
+    evidence: "TestReportArtifact는 'TD-01'을 참조하며, 보고된 테스트 케이스 'TC-01-01'은 'TS-01-01' 시나리오에 연결되어 있습니다. (TD-01 아티팩트가 제공되지 않았으므로, 이 TestReportArtifact에 보고된 내용만을 기준으로 판단함)"
+  - check_name: "scenario_execution_completeness"
+    result: "pass"
+    evidence: "보고서에 명시된 유일한 시나리오 ('TS-01-01')에 대한 테스트 결과 ('TC-01-01')가 'pass'로 기록되어 있습니다. (TD-01 아티팩트가 제공되지 않았으므로, 이 TestReportArtifact에 보고된 내용만을 기준으로 판단함)"
+  - check_name: "evidence_quality"
+    result: "pass"
+    evidence: "육안 확인, 콘솔 오류 확인, 코드 라인 번호(index.html lines 11-12, script.js lines 18-24) 및 함수명 ('generateLottoNumbers')을 포함한 증거가 구체적이고 검증 가능합니다."
+  - check_name: "evidence_type_consistency"
+    result: "pass"
+    evidence: "test_results[0].validation_basis가 'execution'으로 명시되어 있으며, 제공된 증거 ('육안 확인', '개발자 도구 확인', '코드 검토')는 실행 기반 검증과 일치합니다."
+  - check_name: "defect_quality"
+    result: "pass"
+    evidence: "defects 필드가 비어 있으며, 이는 테스트 결과 'pass' 및 'satisfaction_score 100'과 일관됩니다."
+  - check_name: "score_consistency"
+    result: "pass"
+    evidence: "total_acceptance_criteria (5), passed (5), failed (0), satisfaction_score (100), overall_result ('pass')가 서로 일관되고 논리적으로 정합합니다."
+
+violations: []
+
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "CoordAgent"
+  reason: "TestReportArtifact (TEST-01)는 모든 유효성 검사 기준을 충족하며, 다음 단계인 CoordAgent로의 진행이 안전합니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
