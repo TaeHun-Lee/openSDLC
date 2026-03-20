@@ -41,7 +41,7 @@ def _save_artifacts(final_state: dict, out_dir: Path) -> None:
     if impl_yaml:
         from artifacts.code_extractor import write_code_files, get_runtime_info
 
-        workspace_dir = out_dir / "workspace"
+        workspace_dir = (out_dir / "workspace").resolve()
         written = write_code_files(impl_yaml, workspace_dir)
 
         if written:
