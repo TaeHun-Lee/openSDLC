@@ -12,6 +12,8 @@ from registry.models import PipelineDefinition, StepDefinition
 from pipeline.state import PipelineState
 from pipeline.routing import make_validator_router
 from executor.generic_agent import create_agent_node
+from llm_client import QuotaExhaustedError
+
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +125,24 @@ def run_pipeline(
     print("=" * 60)
 
     compiled = create_pipeline(pipeline_def)
-    final_state = compiled.invoke(initial_state)
-
+ 
+    try:
+        final_state = compiled.invoke(initial_state)
+    except QuotaExhaustedError as exc:
+        print("\n" + "=" * 60)
+        print(f"[Pipeline] QUOTA EXHAUSTED — 파이프라인 중단")
+        print(f"[Pipeline] {exc}")
+        print("=" * 60)
+        # Return partial state so artifacts generated so far can be saved
+        initial_state["pipeline_status"] = "quota_exhausted"
+        return initial_state
+    except Exception as exc:
+        print("\n" + "=" * 60)
+        print(f"[Pipeline] ERROR — 파이프라인 비정상 중단: {type(exc).__name__}: {exc}")
+        print("=" * 60)
+        initial_state["pipeline_status"] = f"error: {type(exc).__name__}"
+        return initial_state
+    
     # Determine final status
     last_validation = None
     for sr in reversed(final_state["steps_completed"]):

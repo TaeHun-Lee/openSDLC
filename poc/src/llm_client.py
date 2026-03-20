@@ -3,6 +3,7 @@
 Supports Anthropic (Claude), Google (Gemini), and OpenAI (GPT).
 Provider is selected via OPENSDLC_LLM_PROVIDER env var or config.py defaults.
 Includes automatic retry with backoff for rate-limit (429) errors.
+Detects daily quota exhaustion and provides clear error messages.
 """
 
 import logging
@@ -118,6 +119,16 @@ def _default_quality_check(response: LLMResponse, min_chars: int) -> str | None:
     return None
 
 
+class QuotaExhaustedError(Exception):
+    """Raised when the daily API quota is exhausted (not a transient rate limit)."""
+ 
+    def __init__(self, provider: str, model: str, message: str, retry_after: float | None = None):
+        self.provider = provider
+        self.model = model
+        self.retry_after = retry_after
+        super().__init__(message)
+        
+
 def _extract_retry_delay(exc: Exception, default: float = 60.0) -> float:
     """Extract retry delay from a rate-limit error message.
 
@@ -136,6 +147,12 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "429" in msg or "resource_exhausted" in msg or "rate" in msg
 
+
+def _is_daily_quota_error(exc: Exception) -> bool:
+    """Check if an exception is a daily quota exhaustion (not transient)."""
+    msg = str(exc).lower()
+    return "quota" in msg and ("per day" in msg or "free_tier" in msg or "freetier" in msg)
+ 
 
 def call_llm(
     system: str,
@@ -196,7 +213,28 @@ def call_llm(
                 response = call_fn(system, user_message, resolved_model, max_tokens)
                 break  # success
             except Exception as exc:
-                if _is_rate_limit_error(exc) and rl_attempt < rate_limit_retries:
+                if not _is_rate_limit_error(exc):
+                    raise  # non-rate-limit error — don't retry
+ 
+                # Check if this is a daily quota exhaustion (not transient)
+                if _is_daily_quota_error(exc):
+                    delay = _extract_retry_delay(exc)
+                    raise QuotaExhaustedError(
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        message=(
+                            f"Daily API quota exhausted for {resolved_provider}/{resolved_model}. "
+                            f"The free tier limit has been reached. Options:\n"
+                            f"  1. Wait ~{delay:.0f}s and retry\n"
+                            f"  2. Switch to a different provider: "
+                            f"OPENSDLC_LLM_PROVIDER=anthropic|openai\n"
+                            f"  3. Upgrade to a paid API plan\n"
+                            f"Partial pipeline output has been saved."
+                        ),
+                        retry_after=delay,
+                    ) from exc
+ 
+                if rl_attempt < rate_limit_retries:
                     delay = _extract_retry_delay(exc)
                     logger.warning(
                         "[LLM] Rate limit hit (attempt %d/%d) — waiting %.0fs before retry...",
@@ -210,7 +248,7 @@ def call_llm(
                     )
                     time.sleep(delay)
                 else:
-                    raise  # non-rate-limit error or retries exhausted
+                    raise  # retries exhausted
 
         assert response is not None
         last_response = response

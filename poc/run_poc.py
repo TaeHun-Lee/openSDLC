@@ -146,6 +146,12 @@ def main() -> None:
     if args.output:
         _save_artifacts(final_state, Path(args.output))
 
+    # Exit with non-zero code if pipeline didn't complete successfully
+    status = final_state.get("pipeline_status", "")
+    if status not in ("completed",):
+        print(f"\n[Pipeline] 비정상 종료 (status={status})", file=sys.stderr)
+        sys.exit(2)
+
 
 if __name__ == "__main__":
     main()
