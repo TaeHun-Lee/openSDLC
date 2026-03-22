@@ -1,5 +1,5 @@
 @startuml poc_activity
-title OpenSDLC PoC — 파이프라인 액티비티 다이어그램
+title OpenSDLC PoC — 파이프라인 액티비티 다이어그램\n(full_spiral.yaml 전체 흐름)
 
 skinparam backgroundColor #FAFAFA
 skinparam activity {
@@ -8,7 +8,7 @@ skinparam activity {
   DiamondBackgroundColor #FDEBD0
   DiamondBorderColor #E67E22
   ArrowColor #2C3E50
-  FontSize 12
+  FontSize 11
 }
 skinparam note {
   BackgroundColor #FFFDE7
@@ -17,145 +17,197 @@ skinparam note {
 
 start
 
-:사용자 입력 수신\n(--user-story, --pipeline);
+== Phase 0: 부팅 및 설정 로딩 ==
 
-:pipeline YAML 로드\n(PipelineDefinition 파싱);
+:CLI 인자 파싱\n(--pipeline, --user-story, --max-iterations, --output);
 
-:LangGraph 그래프 빌드\n(build_graph_from_definition);
+:config.py 임포트 (자동 실행)
+├ load_dotenv() → .env 파일 읽기
+├ 경로 설정 (PROJECT_ROOT, ENGINE_DIR, ...)
+├ LLM_PROVIDER / MODEL / LLM_MAX_RETRIES 결정
+└ LOG_LEVEL / LOG_LLM_IO 설정;
+
+:API 키 유효성 검증;
+if (API 키 존재?) then (NO)
+  #Pink:exit(1) — API 키 오류;
+  stop
+else (YES)
+endif
+
+== Phase 0-2: 파이프라인 정의 로딩 ==
+
+:load_pipeline_definition(pipeline.yaml)
+→ YAML 파싱 → PipelineDefinition (Pydantic);
+
+:run_pipeline() 진입
+→ PipelineState 초기화
+{user_story, steps_completed=[], latest_artifacts={},
+ iteration_count=0, max_iterations=N, pipeline_status="running"};
+
+== Phase 0-3: LangGraph 그래프 빌드 ==
+
+:build_graph_from_definition()
+각 step마다:
+  1. get_agent(agent_id) → AgentConfig (lru_cache)
+  2. build_system_prompt() 8단계 조립
+  3. create_agent_node() → node_fn 클로저
+  4. graph.add_node(node_id, node_fn);
 note right
-  각 step → node 생성
-  ValidatorAgent → conditional edge
-  기타 → simple edge
+  **System Prompt 조립 8단계**:
+  1. AgentCommon.txt (공통 규칙)
+  2. Agent별 프롬프트 (.txt)
+  3. 출력 artifact 템플릿
+  4. [ValidatorAgent] 5종 참조 템플릿
+  5. [step.extra_templates]
+  6. Constitution 발췌
+  7. [ValidatorAgent] _ADVERSARIAL_MANDATE
+  8. [CodeAgent] _CODE_FILE_MANDATE
 end note
 
-:PipelineState 초기화\n{user_story, iteration_count=0,\n latest_artifacts={}, steps_completed=[]};
+:엣지 연결
+├ ValidatorAgent → 조건부 엣지 (make_validator_router)
+└ 그 외 → 단순 엣지;
+
+:graph.compile();
 
 == Phase 1: Requirements Analysis ==
 
-:ReqAgent 호출\n[독립 LLM API 호출];
+:ReqAgent 실행 — 독립 LLM 호출;
 note right
-  system_prompt: req-agent.md
-               + constitution
-               + UC 템플릿
   user_message: User Story (최초)
                또는 이전 UC + fail 사유 (재작업)
+  output: UseCaseModelArtifact (YAML)
 end note
 
-:UseCaseModelArtifact (YAML) 생성;
-:latest_artifacts["UseCaseModelArtifact"] 갱신;
+:UseCaseModelArtifact → latest_artifacts 갱신;
 
-:ValidatorAgent 호출\n[독립 LLM API 호출 — context 격리!];
+:ValidatorAgent 실행 — 독립 LLM 호출;
 note right
   user_message: UC artifact YAML만 전달
-  (ReqAgent의 사고 과정, system_prompt 미포함)
+  (context 격리: ReqAgent 사고 과정 미포함)
+  system_prompt에 _ADVERSARIAL_MANDATE 포함
 end note
 
-:ValidationReportArtifact 생성\n(pass | warning | fail);
+:ValidationReportArtifact 생성
+→ get_validation_result() → "pass" | "warning" | "fail";
 
-if (validation_result == "pass"?) then (YES)
-else (NO: fail/warning)
-  if (iteration_count >= max_iterations?) then (YES: 한계 초과)
-    #Pink:파이프라인 강제 종료\n(pipeline_status = "max_retries_exceeded");
+if (validation_result?) then (pass)
+else (warning or fail)
+  :iteration_count++;
+  if (iteration_count >= max_iterations?) then (YES)
+    #Pink:END — max_retries_exceeded;
     stop
-  else (NO: 재작업 가능)
-    :iteration_count++;
-    note left: ReqAgent로 루프백
-    backward: ReqAgent 재호출\n(이전 UC + fail 사유 포함);
+  else (NO: 재작업)
+    backward: ReqAgent 재호출\n(재작업 모드: 이전 UC + fail 사유 포함);
   endif
 endif
 
 == Phase 2: Test Design ==
 
-:TestAgent 호출 (mode=design)\n[독립 LLM API 호출];
+:TestAgent 실행 (mode=design) — 독립 LLM 호출;
 note right
   user_message: UC artifact YAML
-  output: TestDesignArtifact
+  output: TestDesignArtifact (YAML)
 end note
 
-:TestDesignArtifact (YAML) 생성;
+:TestDesignArtifact → latest_artifacts 갱신;
 
-:ValidatorAgent 호출\n(TestDesign 검증);
+:ValidatorAgent 실행 — TestDesign 검증;
 
-if (validation_result == "pass"?) then (YES)
-else (NO)
+if (validation_result?) then (pass)
+else (warning or fail)
+  :iteration_count++;
   if (iteration_count >= max_iterations?) then (YES)
-    #Pink:파이프라인 강제 종료;
+    #Pink:END — max_retries_exceeded;
     stop
   else (NO)
-    :iteration_count++;
-    backward: TestAgent 재호출;
+    backward: TestAgent 재호출 (mode=design);
   endif
 endif
 
 == Phase 3: Implementation ==
 
-:CodeAgent 호출\n[독립 LLM API 호출];
+:CodeAgent 실행 — 독립 LLM 호출;
 note right
   user_message: UC artifact + TestDesign artifact
   max_tokens: 16384
-  output: ImplementationArtifact (YAML + 실제 코드)
+  system_prompt에 _CODE_FILE_MANDATE 포함
+  output: ImplementationArtifact (YAML + code_files)
 end note
 
-:ImplementationArtifact (YAML) 생성;
+:ImplementationArtifact → latest_artifacts 갱신;
 
-:ValidatorAgent 호출\n(Implementation 검증);
+:ValidatorAgent 실행 — Implementation 검증;
 
-if (validation_result == "pass"?) then (YES)
-else (NO)
+if (validation_result?) then (pass)
+else (warning or fail)
+  :iteration_count++;
   if (iteration_count >= max_iterations?) then (YES)
-    #Pink:파이프라인 강제 종료;
+    #Pink:END — max_retries_exceeded;
     stop
   else (NO)
-    :iteration_count++;
     backward: CodeAgent 재호출;
   endif
 endif
 
 == Phase 4: Test Execution ==
 
-:TestAgent 호출 (mode=execution)\n[독립 LLM API 호출];
+:TestAgent 실행 (mode=execution) — 독립 LLM 호출;
 note right
   user_message: TestDesign + Implementation artifact
-  output: TestReportArtifact
+  output: TestReportArtifact (YAML)
 end note
 
-:TestReportArtifact (YAML) 생성;
+:TestReportArtifact → latest_artifacts 갱신;
 
-:ValidatorAgent 호출\n(TestReport 검증);
+:ValidatorAgent 실행 — TestReport 검증;
 
-if (validation_result == "pass"?) then (YES)
-else (NO)
+if (validation_result?) then (pass)
+else (warning or fail)
+  :iteration_count++;
   if (iteration_count >= max_iterations?) then (YES)
-    #Pink:파이프라인 강제 종료;
+    #Pink:END — max_retries_exceeded;
     stop
   else (NO)
-    :iteration_count++;
-    backward: TestAgent 재호출 (execution);
+    backward: TestAgent 재호출 (mode=execution);
   endif
 endif
 
 == Phase 5: Feedback ==
 
-:CoordAgent 호출\n[독립 LLM API 호출];
+:CoordAgent 실행 — 독립 LLM 호출;
 note right
   user_message: TestReport artifact
-  output: FeedbackArtifact
+  output: FeedbackArtifact (YAML)
 end note
 
-:FeedbackArtifact (YAML) 생성;
+:FeedbackArtifact → latest_artifacts 갱신;
 
-== 산출물 저장 ==
+== Phase 6: 산출물 저장 ==
 
-:steps_completed → iteration별 그룹화;
+:steps_completed → extract_iteration() 기준으로 그룹화;
 
-:output/iteration-N/artifacts/*.yaml 저장;
+:output/iteration-N/artifacts/*.yaml 저장
+(파일명: {seq:03d}_{artifact_id}.yaml);
 
-:ImplementationArtifact에서\n실행 코드 파일 추출;
+:latest_artifacts["ImplementationArtifact"] 에서
+code_files 추출 → output/workspace/ 에 코드 파일 저장;
 
-:output/workspace/ 에 코드 파일 저장;
+:pipeline_status = "completed";
 
-#LightGreen:파이프라인 완료\n(pipeline_status = "completed");
+#LightGreen:파이프라인 정상 완료;
 
 stop
+
+== 예외 경로 ==
+
+note right
+  **LLM 내부 retry** (call_llm 내부):
+  ① 품질 미달 (min_response_chars): max_retries=2회 즉시 재호출
+  ② Rate limit (429): rate_limit_retries=3회, _extract_retry_delay() 대기
+  ③ Daily quota 소진: QuotaExhaustedError →
+     pipeline_status = "quota_exhausted"
+     → partial artifacts 저장 가능
+end note
 
 @enduml

@@ -1,5 +1,5 @@
 @startuml poc_sequence
-title OpenSDLC PoC — 실행 시퀀스 다이어그램 (full_spiral 기준)
+title OpenSDLC PoC — 실행 시퀀스 다이어그램\n(poc_classic.yaml 기준: ReqAgent → ValidatorAgent → CodeAgent)
 
 skinparam backgroundColor #FAFAFA
 skinparam sequence {
@@ -15,146 +15,265 @@ skinparam sequence {
 }
 
 actor "사용자" as user
-participant "run_poc.py\n(entry)" as entry
+participant "run_poc.py" as entry
+participant "config.py" as config
 participant "graph_builder" as gb
 participant "LangGraph\nRuntime" as lg
-participant "generic_agent\n(create_agent_node)" as executor
+participant "generic_agent\n(node_fn)" as executor
+participant "registry\n(lru_cache)" as registry
+participant "prompt\nbuilder" as builder
+participant "prompt\nloader" as loader
 participant "llm_client\n(call_llm)" as llm
-participant "routing\n(make_validator_router)" as router
-participant "artifact_parser" as parser
-participant "Anthropic/\nGoogle LLM API" as api
+participant "routing" as router
+participant "artifact\nparser" as parser
+participant "LLM API\n(Google/Anthropic\n/OpenAI)" as api
 
-user -> entry : python run_poc.py\n--pipeline full_spiral.yaml\n--user-story "..."
+== Phase 1: 부팅 및 설정 로딩 ==
 
-entry -> gb : load_pipeline_definition(pipeline_path)
+user -> entry : python run_poc.py\n-p poc_classic.yaml\n-s "로또 번호 생성기"\n-o output/
+
+note over entry, config #FFFDE7
+  ① sys.path에 src/ 추가
+  ② config.py 임포트 (모듈 로드 시점 자동 실행)
+end note
+
+entry -> config : import
+activate config
+config -> config : load_dotenv() → .env 읽기
+config -> config : PROJECT_ROOT / ENGINE_DIR 등 경로 설정
+config -> config : LLM_PROVIDER = "google" (기본값)
+config -> config : MODEL = "gemini-2.5-flash"
+config -> config : LLM_MAX_RETRIES = 2
+config --> entry : 설정값 노출
+deactivate config
+
+note over entry #FFFDE7
+  ③ setup_logging()
+  ④ API 키 유효성 검증 (없으면 exit)
+  ⑤ --user-story 읽기
+end note
+
+== Phase 2: 파이프라인 정의 로딩 ==
+
+entry -> gb : load_pipeline_definition("poc_classic.yaml")
 activate gb
-gb --> entry : PipelineDefinition\n(steps, max_iterations)
+note over gb #FFFDE7
+  ⑥ YAML 읽기 → PipelineDefinition(**raw)
+  PipelineDefinition(
+    name="poc-classic", max_iterations=3,
+    steps=[
+      StepDefinition(step=1, agent="ReqAgent"),
+      StepDefinition(step=2, agent="ValidatorAgent", on_fail="ReqAgent"),
+      StepDefinition(step=3, agent="CodeAgent", max_tokens=16384),
+    ]
+  )
+end note
+gb --> entry : PipelineDefinition
 deactivate gb
+
+== Phase 3: 그래프 빌드 ==
 
 entry -> gb : run_pipeline(pipeline_def, user_story)
 activate gb
 
+gb -> gb : PipelineState 초기화\n{user_story, steps_completed=[],\n latest_artifacts={}, iteration_count=0}
+
 gb -> gb : build_graph_from_definition()
-note right of gb
-  각 step → node_id 생성
-  ValidatorAgent → conditional edge
-  기타 → simple edge
+
+loop 각 step (1,2,3)마다
+  gb -> executor : create_agent_node(step_def)
+  activate executor
+
+  executor -> registry : get_agent(agent_id)
+  activate registry
+  note over registry #FFFDE7
+    최초 1회만 *.config.yaml 로드
+    이후 lru_cache 캐싱 반환
+  end note
+  registry --> executor : AgentConfig
+  deactivate registry
+
+  executor -> builder : build_system_prompt(agent_config, step)
+  activate builder
+  note over builder #E8F5E9
+    **System Prompt 조립 8단계**:
+    1. Common Rules → load_common_prompt() → AgentCommon.txt
+    2. Agent-specific Prompt → load_agent_prompt(agent_id)
+    3. Output Templates (주출력 artifact 템플릿)
+    4. [ValidatorAgent만] 5종 참조 템플릿
+       (UC/TD/Impl/TR/FB — 스키마 검증용)
+    5. [step.extra_templates 있으면] 추가 템플릿
+    6. Constitution → load_constitution_excerpt()
+    7. [ValidatorAgent만] _ADVERSARIAL_MANDATE 주입
+       "fail 후보 3개 먼저 나열, BLOCKER 없을 때만 pass"
+    8. [CodeAgent만] _CODE_FILE_MANDATE 주입
+       "code_files 필드 필수, 완전한 코드 포함"
+  end note
+
+  builder -> loader : load_common_prompt()
+  loader --> builder : AgentCommon.txt
+  builder -> loader : load_agent_prompt(agent_id)
+  loader --> builder : Agent별 .txt 프롬프트
+  builder -> loader : load_template(name) [1~N회]
+  loader --> builder : artifact 템플릿 YAML
+  builder -> loader : load_constitution_excerpt()
+  loader --> builder : constitution *.md
+  builder --> executor : system_prompt (조립 완성)
+  deactivate builder
+
+  executor --> gb : node_fn 클로저 반환 (아직 미실행)
+  deactivate executor
+
+  gb -> gb : graph.add_node(node_id, node_fn)
+end
+
+note over gb #FFFDE7
+  ⑮ step_1_ReqAgent → step_2_ValidatorAgent (단순 엣지)
+  ⑯ step_2_ValidatorAgent → 조건부 엣지:
+     make_validator_router(step_num=2, max_iterations=3)
+     "pass" → step_3_CodeAgent
+     "rework" → step_1_ReqAgent
+     "max_retries" → END
+  ⑰ step_3_CodeAgent → END (단순 엣지)
+  ⑱ graph.compile()
 end note
 
 gb -> lg : compiled.invoke(initial_state)
 activate lg
 
-== Phase 1: Requirements ==
+== Phase 4-1: ReqAgent 실행 (⑲~㉕) ==
 
-lg -> executor : node_fn(state)\n[step_1_ReqAgent]
+lg -> executor : node_fn(state) [step_1_ReqAgent]
 activate executor
-executor -> executor : _build_user_message()\n→ user_story 포함
+
+executor -> executor : _build_user_message()\n→ ValidationReport 없음 → 최초 모드\n"[PMAgent] User Story를 분석하여 UC 작성..."
+
 executor -> llm : call_llm(system_prompt, user_message)
 activate llm
-llm -> api : messages.create(model=gemini-2.5-pro)
-api --> llm : LLM 응답 텍스트
-llm --> executor : LLMResponse
+
+loop 품질 미달 retry (최대 max_retries=2회)
+  llm -> api : _call_google(system, user_msg,\n  model="gemini-2.5-flash")
+  api --> llm : LLMResponse(text=...)
+
+  llm -> llm : _default_quality_check()\n(min_response_chars 검증)
+
+  alt 품질 OK
+    llm --> executor : LLMResponse
+  else 품질 미달 or 429 rate-limit
+    note over llm : 재시도 대기\n품질 미달: 즉시 재시도\n429: _extract_retry_delay() 후 대기
+  end
+end
+
 deactivate llm
-executor -> parser : extract_yaml_from_response()
-parser --> executor : UseCaseModelArtifact (YAML)
-executor --> lg : state 업데이트\n{steps_completed, latest_artifacts}
+
+executor -> parser : extract_yaml_from_response(response.text)\n(```yaml 펜스 제거, artifact_id: 탐색)
+parser --> executor : UseCaseModelArtifact YAML
+
+executor -> executor : StepResult 생성\n{step_id, agent_id="ReqAgent",\n artifact_yaml, validation_result=None}
+
+executor --> lg : state 업데이트\n{steps_completed+=[result],\n latest_artifacts["UC"]=yaml}
 deactivate executor
 
-lg -> executor : node_fn(state)\n[step_2_ValidatorAgent]
+== Phase 4-2: ValidatorAgent 실행 (㉖~㉛) ==
+
+lg -> executor : node_fn(state) [step_2_ValidatorAgent]
 activate executor
-executor -> executor : _build_user_message()\n→ UC artifact만 전달\n(context 격리!)
-executor -> llm : call_llm(system_prompt, uc_artifact_only)
+
+executor -> executor : _build_user_message()\n→ _find_validation_target() → "UseCaseModelArtifact"\n→ UC YAML만 전달! (context 격리)
+note right of executor #FFE0E0
+  **Context 격리 적용**:
+  user_message = UC artifact YAML 만.
+  ReqAgent의 system_prompt, 사고 과정 미포함.
+end note
+
+executor -> llm : call_llm(system_prompt,\n  uc_artifact_only)
 activate llm
-llm -> api : messages.create(model=gemini-2.5-pro)
-api --> llm : ValidationReport 텍스트
+note over llm #E8F5E9
+  system_prompt에 _ADVERSARIAL_MANDATE 포함:
+  "List at least 3 potential failure candidates,
+   state BLOCKER/NOT, pass only if ZERO blockers"
+end note
+llm -> api : _call_google(...)
+api --> llm : ValidationReportArtifact 텍스트
 llm --> executor : LLMResponse
 deactivate llm
+
 executor -> parser : extract_yaml_from_response()
-executor -> parser : get_validation_result()
-parser --> executor : validation_result: "pass" | "fail"
-executor --> lg : state 업데이트\n{validation_result}
+executor -> parser : parse_artifact(artifact_yaml)
+executor -> parser : get_validation_result(report_dict, raw_yaml)
+parser --> executor : validation_result: "pass" | "warning" | "fail"
+
+executor -> executor : validation_result in ("fail","warning")\n→ iteration_count += 1
+
+executor --> lg : state 업데이트\n{validation_result, iteration_count}
 deactivate executor
+
+== Phase 4-3: 조건부 라우팅 (㉜) ==
 
 lg -> router : route_after_validation(state)
 activate router
 
-alt validation_result == "fail" AND iteration_count < max_iterations
-  router --> lg : "rework"
-  lg -> executor : node_fn(state)\n[step_1_ReqAgent] ← 재진입
-  note right: iteration_count++\n이전 UC + fail 사유 포함하여\n재작업 요청
-else validation_result == "fail" AND iteration_count >= max_iterations
-  router --> lg : "max_retries"
-  lg --> gb : END (강제 종료)
-else validation_result == "pass"
-  router --> lg : "pass"
+alt validation_result == "pass"
+  router --> lg : "pass" → step_3_CodeAgent 진행
+else validation_result == "fail" or "warning"\nAND iteration_count < max_iterations (3)
+  router --> lg : "rework" → step_1_ReqAgent 재실행
+  note right : ⑲로 되돌아감\n_build_user_message() 재작업 모드:\n"ValidationReport + 이전 UC + User Story"
+else validation_result == "fail" or "warning"\nAND iteration_count >= max_iterations
+  router --> lg : "max_retries" → END
 end
+
 deactivate router
 
-== Phase 2: Test Design ==
+== Phase 4-4: CodeAgent 실행 (㉝~㉟, pass 후) ==
 
-lg -> executor : node_fn(state)\n[step_3_TestAgent (design)]
+lg -> executor : node_fn(state) [step_3_CodeAgent]
 activate executor
-executor -> llm : call_llm(system_prompt,\n  UC artifact)
-llm -> api : messages.create(model=gemini-2.5-flash)
-api --> llm : TestDesignArtifact 텍스트
+
+executor -> executor : _build_user_message() CodeAgent 분기\n→ "승인된 UC artifact 기반 Impl 작성\nUseCaseModelArtifact: ..."
+note right of executor #E8F5E9
+  system_prompt에 _CODE_FILE_MANDATE 포함:
+  "code_files 필드 필수, 완전한 실행 코드"
+end note
+
+executor -> llm : call_llm(system_prompt, uc_yaml,\n  max_tokens=16384)
+llm -> api : _call_google(...)
+api --> llm : ImplementationArtifact YAML\n(code_files 포함)
 llm --> executor : LLMResponse
 executor -> parser : extract_yaml_from_response()
-parser --> executor : TestDesignArtifact (YAML)
-executor --> lg : state 업데이트
+executor --> lg : state 업데이트 → END
 deactivate executor
-
-lg -> executor : node_fn(state)\n[step_4_ValidatorAgent]
-note right: TestDesignArtifact 검증
-lg -> router : route_after_validation(state)
-note right: pass → Phase 3\nfail → step_3_TestAgent 재진입
-
-== Phase 3: Implementation ==
-
-lg -> executor : node_fn(state)\n[step_5_CodeAgent]
-activate executor
-executor -> executor : _build_user_message()\n→ UC + TestDesign artifact 전달
-executor -> llm : call_llm(system_prompt,\n  UC + TestDesign,\n  max_tokens=16384)
-llm -> api : messages.create(model=gemini-2.5-pro)
-api --> llm : ImplementationArtifact 텍스트\n(YAML + 실제 코드)
-llm --> executor : LLMResponse
-executor -> parser : extract_yaml_from_response()
-parser --> executor : ImplementationArtifact (YAML)
-executor --> lg : state 업데이트
-deactivate executor
-
-lg -> executor : node_fn(state)\n[step_6_ValidatorAgent]
-note right: ImplementationArtifact 검증
-lg -> router : route_after_validation(state)
-note right: pass → Phase 4\nfail → step_5_CodeAgent 재진입
-
-== Phase 4: Test Execution ==
-
-lg -> executor : node_fn(state)\n[step_7_TestAgent (execution)]
-note right: TestDesign + Impl artifact 기반\nTestReportArtifact 생성
-
-lg -> executor : node_fn(state)\n[step_8_ValidatorAgent]
-note right: TestReportArtifact 검증
-lg -> router : route_after_validation(state)
-
-== Phase 5: Feedback ==
-
-lg -> executor : node_fn(state)\n[step_9_CoordAgent]
-note right: TestReport → FeedbackArtifact 생성
 
 lg --> gb : final_state
 deactivate lg
 
+== Phase 5: 결과 저장 (㊱~㊲) ==
+
 gb --> entry : final_state
 deactivate gb
 
-entry -> entry : _save_artifacts(final_state, out_dir)
-note right
-  iteration별 디렉토리 생성:
+entry -> entry : pipeline_status 결정\niteration_count >= max_iterations?\n→ "max_retries_exceeded"\n그 외 → "completed"
+
+entry -> parser : extract_artifact_id()\nextract_iteration()
+note over entry #FFFDE7
+  ㊱ steps_completed → iteration별 그룹화
   output/iteration-01/artifacts/
-  output/iteration-02/artifacts/
-  output/workspace/ (실행 코드)
+    001_UC-01.yaml
+    002_UC-01-VAL-1.yaml
+    003_IMPL-01.yaml
+  ㊲ ImplementationArtifact → code_extractor
+  output/workspace/ 에 실행 코드 저장
 end note
 
-entry --> user : 완료 출력\n(artifacts 경로, 실행 방법)
+entry -> entry : _save_artifacts(final_state, output/)
+entry --> user : 완료 출력\n(artifacts 경로, 실행 명령어)
+
+== 예외: Quota 소진 ==
+
+note over entry, api #FFE0E0
+  LLM API daily quota 소진 시:
+  QuotaExhaustedError 발생
+  → pipeline_status = "quota_exhausted"
+  → 그때까지 생성된 partial artifacts는 저장 가능
+end note
 
 @enduml

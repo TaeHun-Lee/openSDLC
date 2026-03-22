@@ -4,6 +4,21 @@
 어떤 파일의 어떤 함수가 어떤 순서로 호출되는지를 차근차근 추적한 것이다.
 
 > 기준 파이프라인: `poc_classic.yaml` (ReqAgent → ValidatorAgent → CodeAgent)
+>
+> full_spiral.yaml (9단계 전체 파이프라인)은 [Phase 5: full_spiral 파이프라인](#phase-5-full_spiral-파이프라인) 참조
+
+---
+
+## UML 다이어그램 참조
+
+`poc/docs/uml/` 디렉토리에 4종의 PlantUML 다이어그램이 있다.
+
+| 파일 | 종류 | 내용 |
+|------|------|------|
+| `poc_architecture.puml` | 컴포넌트 다이어그램 | 모듈 간 의존관계 전체 (config.py, multi-provider, mandates 포함) |
+| `poc_sequence.puml` | 시퀀스 다이어그램 | poc_classic 실행 흐름, Phase 1~5, LLM retry 상세 |
+| `poc_activity.puml` | 액티비티 다이어그램 | full_spiral 전체 파이프라인 플로우, 조건부 라우팅 |
+| `poc_state.puml` | 상태 다이어그램 | PipelineState 전이 (Booting → Running → Saving/Failed) |
 
 ---
 
@@ -23,8 +38,16 @@ python run_poc.py -p pipelines/poc_classic.yaml -s "로또 번호 생성기" -o 
 ① run_poc.py:10       sys.path에 src/ 추가
 ② run_poc.py:12       config.py 임포트 (모듈 로드 시점에 실행)
    └─ config.py:8     load_dotenv() → .env 파일에서 환경변수 로드
-   └─ config.py:14-17 PROJECT_ROOT, ENGINE_DIR, PROMPTS_DIR, TEMPLATES_DIR 경로 설정
-   └─ config.py:20-33 LLM_PROVIDER, API 키, MODEL 결정
+   └─ config.py:11-17 PROJECT_ROOT, ENGINE_DIR, CONSTITUTION_DIR,
+                       PROMPTS_DIR, TEMPLATES_DIR 경로 설정
+   └─ config.py:20    LLM_PROVIDER = "google" | "anthropic" | "openai" 결정
+                       (OPENSDLC_LLM_PROVIDER 환경변수, 기본값 "google")
+   └─ config.py:28-33 각 프로바이더 기본 모델 결정:
+                         anthropic → claude-sonnet-4-6
+                         google    → gemini-2.5-flash
+                         openai    → gpt-4o
+                       MODEL = OPENSDLC_MODEL 환경변수 or 기본값
+   └─ config.py:36-43 LLM_MAX_RETRIES=2, LOG_LEVEL="INFO", LOG_LLM_IO=true
 ③ run_poc.py:96       setup_logging() → 로깅 설정
 ④ run_poc.py:127-138  API 키 유효성 검증 (없으면 exit)
 ⑤ run_poc.py:145-149  --user-story에서 사용자 입력 읽기
@@ -96,13 +119,19 @@ Step 1 (ReqAgent):
   ⑩  graph_builder.py:51   graph.add_node("step_1_ReqAgent", node_fn)
 
 Step 2 (ValidatorAgent):
-  ⑪  같은 과정, 단 builder.py:129-136에서 추가로:
-      - 모든 artifact 템플릿을 검증 참조용으로 포함
-      - builder.py:150-152 _ADVERSARIAL_MANDATE 주입
+  ⑪  같은 과정, 단 builder.py에서 추가로:
+      - builder.py:129-136 _VALIDATOR_REFERENCE_TEMPLATES (5종) 스키마 참조 주입:
+        UseCaseModelArtifact, TestDesignArtifact, ImplementationArtifact,
+        TestReportArtifact, FeedbackArtifact
+      - builder.py:150-152 _ADVERSARIAL_MANDATE 주입:
+        "List at least 3 potential failure candidates,
+         state BLOCKER/NOT, pass only if ZERO blockers remain"
   ⑫  graph.add_node("step_2_ValidatorAgent", node_fn)
 
 Step 3 (CodeAgent):
-  ⑬  같은 과정, 단 builder.py:155-157에서 _CODE_FILE_MANDATE 주입
+  ⑬  같은 과정, 단 builder.py:154-157에서 _CODE_FILE_MANDATE 주입:
+      "code_files 필드 필수, 완전한 실행 코드 포함,
+       code_files[].content는 생략·플레이스홀더 금지"
   ⑭  graph.add_node("step_3_CodeAgent", node_fn)
 ```
 
@@ -150,12 +179,20 @@ LangGraph가 entry point부터 노드를 순서대로 실행한다.
     └─ llm_client.py:157-288  call_llm()
        ├─ llm_client.py:186-188  provider/model 결정 (config 기본값 or step 오버라이드)
        ├─ llm_client.py:189      _PROVIDERS["google"] → _call_google 선택
-       ├─ llm_client.py:213      _call_google(system, user_message, model, max_tokens)
-       │   └─ llm_client.py:58-78   Google Gemini API 호출
-       │       → LLMResponse(text="artifact_id: UC-01\n...", model="gemini-2.5-flash", ...)
-       └─ llm_client.py:264-270  _default_quality_check() → 길이 검증 (500자 이상?)
-          ├─ OK → response 반환
-          └─ NG → 최대 max_retries까지 재호출 (llm_client.py:198 루프)
+       │   (멀티 프로바이더: _call_anthropic / _call_google / _call_openai)
+       ├─ llm_client.py:198      for attempt in range(1, max_retries + 2): ← 재시도 루프
+       │   ├─ _call_google(system, user_message, model, max_tokens)
+       │   │   └─ llm_client.py:58-78  Google Gemini API 호출
+       │   │       → LLMResponse(text=..., model=..., input_tokens, output_tokens)
+       │   ├─ _default_quality_check() → min_response_chars 검증 (기본 500자)
+       │   │   ├─ OK → response 반환
+       │   │   └─ NG → 재호출 (최대 max_retries=2회)
+       │   └─ 429 / RESOURCE_EXHAUSTED 에러 시:
+       │       ├─ _is_daily_quota_error() → YES: QuotaExhaustedError 발생
+       │       │   → pipeline_status = "quota_exhausted"
+       │       │   → partial state 반환 (지금까지 artifacts 저장 가능)
+       │       └─ NO (일시적 rate limit):
+       │           rate_limit_retries=3회, _extract_retry_delay() 대기 후 재호출
 
 ㉒  generic_agent.py:149  extract_yaml_from_response(response.text)
     └─ parser.py:10-43    응답에서 YAML 부분만 추출
@@ -205,12 +242,19 @@ LangGraph가 entry point부터 노드를 순서대로 실행한다.
 ```
 ㉜  LangGraph가 conditional edge의 라우팅 함수 실행
     └─ routing.py:19  route_after_validation(state)
-       ├─ validation_result == "pass"  → "pass"  → step_3_CodeAgent로 진행
-       ├─ validation_result == "fail"
-       │   └─ iteration_count < 3?
+       ├─ validation_result == "pass"
+       │   → "pass" → step_3_CodeAgent로 진행
+       ├─ validation_result == "fail" OR "warning"
+       │   └─ iteration_count < max_iterations(3)?
        │       ├─ YES → "rework" → step_1_ReqAgent로 되돌아감 (⑲부터 반복)
        │       └─ NO  → "max_retries" → END (강제 종료)
-       └─ validation_result == "warning" → fail과 동일 처리
+       │           → pipeline_status = "max_retries_exceeded"
+       │
+       ★ warning은 fail과 동일하게 rework 처리됨.
+         ValidatorAgent가 "warning"을 반환하는 경우:
+         - 필수 필드는 있지만 acceptance_criteria가 다소 모호한 경우
+         - 스키마 준수는 됐지만 품질 기준에 미흡한 경우
+         이 경우도 iteration_count가 증가하고 재작업이 트리거됨.
 ```
 
 ### 4-4. 재작업 시 (rework → ReqAgent 재실행)
@@ -297,6 +341,67 @@ run_poc.py:main()
      ├─ parser.py:extract_iteration()
      └─ code_extractor.py:write_code_files()
 ```
+
+---
+
+## Phase 5: full_spiral 파이프라인
+
+`poc_classic.yaml`이 3단계인 반면, `full_spiral.yaml`은 9단계 전체 SDLC를 수행한다.
+
+```
+full_spiral.yaml 구조:
+  step 1: ReqAgent       (gemini-2.5-pro)   → UseCaseModelArtifact
+  step 2: ValidatorAgent (gemini-2.5-pro)   on_fail: ReqAgent
+  step 3: TestAgent      (gemini-2.5-flash) mode=design → TestDesignArtifact
+  step 4: ValidatorAgent (gemini-2.5-flash) on_fail: TestAgent
+  step 5: CodeAgent      (gemini-2.5-pro)   max_tokens=16384 → ImplementationArtifact
+  step 6: ValidatorAgent (gemini-2.5-pro)   on_fail: CodeAgent
+  step 7: TestAgent      (gemini-2.5-flash) mode=execution → TestReportArtifact
+  step 8: ValidatorAgent (gemini-2.5-flash) on_fail: TestAgent
+  step 9: CoordAgent     (gemini-2.5-pro)   → FeedbackArtifact
+```
+
+### full_spiral에서 poc_classic과 다른 점
+
+**TestAgent (mode=design, step 3)**
+- `_build_user_message()` — TestAgent design 분기:
+  "아래 UseCaseModelArtifact를 기반으로 TestDesignArtifact를 작성하라."
+- ValidatorAgent가 TestDesign을 검증하여 fail 시 TestAgent로 재작업 루프
+
+**CodeAgent (step 5) — full_spiral에서는 TestDesign도 함께 입력**
+- `_build_user_message()` — CodeAgent 분기:
+  UC artifact + TestDesign artifact 동시 전달
+  "아래 승인된 artifacts를 기반으로 ImplementationArtifact를 작성하라."
+
+**TestAgent (mode=execution, step 7)**
+- `_resolve_output_type("TestAgent", step)` → mode=execution → "TestReportArtifact"
+- `_build_user_message()` — TestAgent execution 분기:
+  "아래 artifacts를 기반으로 TestReportArtifact를 작성하라.
+   TestDesignArtifact: ... ImplementationArtifact: ..."
+
+**CoordAgent (step 9)**
+- `_build_user_message()` — CoordAgent 분기:
+  "아래 TestReportArtifact를 기반으로 FeedbackArtifact를 작성하라."
+- on_fail 없음 → 단순 엣지 → END
+
+### 산출물 저장 구조 (full_spiral 실행 시)
+
+```
+output/
+├── iteration-01/artifacts/
+│   ├── 001_UC-01.yaml         (ReqAgent)
+│   ├── 002_UC-01-VAL-1.yaml   (ValidatorAgent UC 검증)
+│   ├── 003_TD-01.yaml         (TestAgent design)
+│   ├── 004_TD-01-VAL-1.yaml   (ValidatorAgent TD 검증)
+│   ├── 005_IMPL-01.yaml       (CodeAgent)
+│   ├── 006_IMPL-01-VAL-1.yaml (ValidatorAgent Impl 검증)
+│   ├── 007_TEST-01.yaml       (TestAgent execution)
+│   └── 008_TEST-01-VAL-1.yaml (ValidatorAgent TR 검증)
+└── workspace/
+    └── (실행 가능한 코드 파일)
+```
+
+재작업이 발생하면 iteration-02/ 디렉토리에 해당 Phase부터의 artifacts가 저장된다.
 
 ---
 

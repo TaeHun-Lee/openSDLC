@@ -6,11 +6,15 @@ skinparam backgroundColor #FAFAFA
 skinparam component {
   BackgroundColor #E8F4FD
   BorderColor #2980B9
-  FontSize 12
+  FontSize 11
 }
 skinparam package {
   BackgroundColor #FEF9E7
   BorderColor #F39C12
+}
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #F9A825
 }
 skinparam arrow {
   Color #2C3E50
@@ -18,73 +22,129 @@ skinparam arrow {
 }
 
 package "EntryPoint" {
-  [run_poc.py] as entry
+  [run_poc.py\n(main, _save_artifacts)] as entry
+}
+
+package "Boot / Config" {
+  [config.py\n─────────────\nload_dotenv()\nPROJECT_ROOT\nENGINE_DIR / CONSTITUTION_DIR\nPROMPTS_DIR / TEMPLATES_DIR\nLLM_PROVIDER / MODEL\nLLM_MAX_RETRIES\nLOG_LEVEL / LOG_LLM_IO] as config
 }
 
 package "Pipeline Engine" {
-  [graph_builder.py\n(load_pipeline_definition\nbuild_graph_from_definition\nrun_pipeline)] as graph_builder
-  [routing.py\n(make_validator_router\nroute_after_validation)] as routing
-  [state.py\n(PipelineState\nStepResult)] as state
+  [graph_builder.py\n─────────────\nload_pipeline_definition()\nbuild_graph_from_definition()\ncreate_pipeline()\nrun_pipeline()] as graph_builder
+  [routing.py\n─────────────\nmake_validator_router()\nroute_after_validation()\n→ pass | rework | max_retries] as routing
+  [state.py\n─────────────\nPipelineState (TypedDict)\nStepResult (TypedDict)\npipeline_status:\n  running | completed\n  max_retries_exceeded\n  quota_exhausted] as state
 }
 
 package "Executor" {
-  [generic_agent.py\n(create_agent_node\n_build_user_message)] as executor
+  [generic_agent.py\n─────────────\ncreate_agent_node() ← 팩토리\n_build_user_message()\n  ├ ReqAgent: user_story or rework\n  ├ ValidatorAgent: artifact만 전달\n  │  (context 격리 원칙)\n  ├ CodeAgent: UC+TestDesign\n  ├ TestAgent: UC or TD+Impl\n  └ CoordAgent: TestReport] as executor
 }
 
 package "Registry" {
-  [agent_registry.py\n(load_all_agents\nget_agent)] as registry
-  [models.py\n(AgentConfig\nStepDefinition\nPipelineDefinition)] as models
+  [agent_registry.py\n─────────────\n@lru_cache load_all_agents()\nget_agent(agent_id)] as registry
+  [models.py\n─────────────\nAgentConfig\nAgentPersona\nStepDefinition\nPipelineDefinition] as models
 }
 
 package "Prompts" {
-  [builder.py\n(build_system_prompt)] as prompt_builder
-  [loader.py\n(load_agent_prompt\nload_template\nload_constitution)] as prompt_loader
+  [builder.py\n─────────────\nbuild_system_prompt()\n조립 순서 (8단계):\n1. Common Rules (AgentCommon)\n2. Agent-specific Prompt\n3. Output Templates (주출력)\n4. Validator: 5종 참조 템플릿\n   (UC/TD/Impl/TR/FB)\n5. Extra Templates (step.extra)\n6. Constitution (거버넌스)\n7. _ADVERSARIAL_MANDATE\n   (ValidatorAgent 전용)\n8. _CODE_FILE_MANDATE\n   (CodeAgent 전용)] as prompt_builder
+
+  [loader.py\n─────────────\nload_common_prompt()\nload_agent_prompt(agent_id)\nload_template(name)\nload_constitution_excerpt()] as prompt_loader
+}
+
+package "LLM Client" {
+  [llm_client.py\n─────────────\ncall_llm()\n  ├ provider routing:\n  │  _call_anthropic()\n  │  _call_google()\n  │  _call_openai()\n  ├ 내부 retry:\n  │  quality_check (min_chars)\n  │  max_retries=2 (품질 미달)\n  │  rate_limit_retries=3 (429)\n  │  _extract_retry_delay()\n  └ QuotaExhaustedError\n     (daily quota 소진)] as llm_client
 }
 
 package "Artifacts" {
-  [parser.py\n(extract_yaml_from_response\nparse_artifact\nget_validation_result)] as artifact_parser
-  [code_extractor.py\n(write_code_files\nget_runtime_info)] as code_extractor
+  [parser.py\n─────────────\nextract_yaml_from_response()\nparse_artifact()\nget_validation_result()\nextract_artifact_id()\nextract_iteration()] as artifact_parser
+  [code_extractor.py\n─────────────\nwrite_code_files()\nget_runtime_info()] as code_extractor
 }
 
-package "LLM" {
-  [llm_client.py\n(call_llm)] as llm_client
+package "Config Files (Read-Only)" {
+  database "pipelines/\n  poc_classic.yaml (3 steps)\n  full_spiral.yaml (9 steps)" as pipeline_yaml
+  database "open-sdlc-engine/\n  agent-configs/*.config.yaml" as agent_configs
+  database "open-sdlc-engine/prompts/agent/\n  AgentCommon.txt\n  ReqAgent.txt\n  ValidatorAgent.txt\n  CodeAgent.txt ..." as agent_prompts
+  database "open-sdlc-engine/templates/artifacts/\n  UseCaseModelArtifact\n  ValidationReportArtifact\n  TestDesignArtifact\n  ImplementationArtifact\n  TestReportArtifact\n  FeedbackArtifact" as templates
+  database "open-sdlc-constitution/\n  01-Foundation-Principles.md\n  02-Architecture-Guidelines.md ..." as constitution
 }
 
-package "Config Files" {
-  database "pipelines/*.yaml\n(full_spiral, poc_classic)" as pipeline_yaml
-  database "agent-configs/*.yaml" as agent_configs
-  database "prompts/agent/*.md" as agent_prompts
-  database "templates/" as templates
-  database "open-sdlc-constitution/" as constitution
+package "LLM API (External)" {
+  [Anthropic\nClaude API] as anthropic_api
+  [Google\nGemini API] as google_api
+  [OpenAI\nGPT API] as openai_api
 }
 
-package "Output" {
-  database "output/iteration-N/\nartifacts/*.yaml" as artifacts_out
-  database "output/workspace/\n(코드 파일)" as workspace_out
+package "Output (Runtime)" {
+  database "output/iteration-N/\n  artifacts/*.yaml" as artifacts_out
+  database "output/workspace/\n  (실행 가능한 코드 파일)" as workspace_out
 }
 
+' Entry connections
+entry --> config : import (모듈 로드 시 자동 실행)
 entry --> graph_builder : load_pipeline_definition()\nrun_pipeline()
-entry --> artifacts_out : _save_artifacts()
+entry --> artifact_parser : extract_artifact_id()\nextract_iteration()
 entry --> code_extractor : write_code_files()
+entry --> artifacts_out : YAML 파일 저장
+code_extractor --> workspace_out : 코드 파일 생성
 
+' Pipeline Engine
 graph_builder --> routing : make_validator_router()
 graph_builder --> executor : create_agent_node()
-graph_builder --> state : PipelineState 초기화
+graph_builder --> state : PipelineState 생성
+graph_builder --> models : PipelineDefinition 파싱
+pipeline_yaml --> graph_builder : YAML 읽기
 
-executor --> registry : get_agent()
+' Executor
+executor --> registry : get_agent(agent_id)
 executor --> prompt_builder : build_system_prompt()
-executor --> llm_client : call_llm()
-executor --> artifact_parser : extract_yaml_from_response()
+executor --> llm_client : call_llm(system, user_msg)
+executor --> artifact_parser : extract_yaml_from_response()\nget_validation_result()
 
-registry --> agent_configs : 읽기
+' Registry
+registry --> agent_configs : *.config.yaml 읽기\n(lru_cache 캐싱)
 registry --> models : AgentConfig 반환
 
-prompt_builder --> prompt_loader : 파일 로드
-prompt_loader --> agent_prompts : 읽기
-prompt_loader --> templates : 읽기
-prompt_loader --> constitution : 읽기
+' Prompt builder
+prompt_builder --> prompt_loader : 파일 로드 요청
+prompt_loader --> agent_prompts : AgentCommon.txt\n각 Agent 프롬프트
+prompt_loader --> templates : 아티팩트 템플릿
+prompt_loader --> constitution : 거버넌스 원칙
 
-pipeline_yaml --> graph_builder : YAML 파싱
-code_extractor --> workspace_out : 코드 파일 저장
+' LLM routing
+llm_client --> anthropic_api : _call_anthropic()
+llm_client --> google_api : _call_google()
+llm_client --> openai_api : _call_openai()
+
+note bottom of executor
+  **Context 격리 원칙**:
+  ValidatorAgent에게는
+  artifact YAML만 전달.
+  이전 Agent의 system_prompt,
+  사고 과정 미포함.
+end note
+
+note right of llm_client
+  **두 가지 retry 루프**:
+  1. 품질 미달 retry (max_retries=2)
+     → _default_quality_check()
+  2. Rate limit retry (rate_limit_retries=3)
+     → 429/RESOURCE_EXHAUSTED
+     → _extract_retry_delay()
+  Daily quota 소진 시
+  → QuotaExhaustedError 발생
+  → pipeline_status="quota_exhausted"
+end note
+
+note right of prompt_builder
+  **ValidatorAgent 전용 주입**:
+  _ADVERSARIAL_MANDATE:
+    "fail 후보 3개 먼저 열거,
+     BLOCKER 없을 때만 pass"
+  + 5종 참조 템플릿 (스키마 검증용)
+
+  **CodeAgent 전용 주입**:
+  _CODE_FILE_MANDATE:
+    "code_files 필드 필수,
+     완전한 실행 코드 포함"
+end note
 
 @enduml

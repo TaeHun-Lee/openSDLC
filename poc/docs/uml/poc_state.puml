@@ -9,137 +9,180 @@ skinparam state {
   StartColor #2C3E50
   EndColor #2C3E50
 }
-
-[*] --> Initialized : run_pipeline() 호출
-
-state Initialized {
-  : user_story = 입력값
-  : steps_completed = []
-  : latest_artifacts = {}
-  : iteration_count = 0
-  : pipeline_status = "running"
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #F9A825
 }
 
-Initialized --> Requirements : LangGraph.invoke()
+[*] --> Booting : python run_poc.py 실행
 
-state Requirements {
-  state "ReqAgent 실행중" as req_running {
-    : LLM 독립 호출
-    : UseCaseModelArtifact 생성
-    : latest_artifacts 갱신
-  }
-
-  state "ValidatorAgent 실행중" as val_req {
-    : UC artifact만 입력
-    : ValidationReport 생성
-    : validation_result 추출
-  }
-
-  req_running --> val_req
+state Booting {
+  : config.py 임포트 (load_dotenv)
+  : 경로/프로바이더/모델 설정
+  : API 키 검증
+  : pipeline YAML 파싱
 }
 
-state ValidationCheck_UC <<choice>>
-Requirements --> ValidationCheck_UC
+Booting --> GraphBuilding : API 키 유효
 
-ValidationCheck_UC --> TestDesign : pass
-ValidationCheck_UC --> Requirements : fail\n(iteration_count < max)
-ValidationCheck_UC --> Failed : fail\n(iteration_count >= max)
+Booting --> [*] : API 키 없음\n(exit 1)
 
-state TestDesign {
-  state "TestAgent 실행중\n(mode=design)" as test_design {
-    : UC artifact 입력
-    : TestDesignArtifact 생성
-  }
-  state "ValidatorAgent 실행중" as val_test {
-    : TestDesign artifact 검증
-  }
-  test_design --> val_test
+state GraphBuilding {
+  : lru_cache로 AgentConfig 전부 로드
+  : 각 step → node_fn 클로저 생성
+  : system_prompt 조립 (8단계)
+  : 엣지 연결 (단순 / 조건부)
+  : graph.compile()
 }
 
-state ValidationCheck_TD <<choice>>
-TestDesign --> ValidationCheck_TD
+GraphBuilding --> Running : compiled.invoke(initial_state)
 
-ValidationCheck_TD --> Implementation : pass
-ValidationCheck_TD --> TestDesign : fail (재작업)
-ValidationCheck_TD --> Failed : 한계 초과
+state Running {
 
-state Implementation {
-  state "CodeAgent 실행중" as code {
-    : UC + TestDesign artifact 입력
-    : ImplementationArtifact 생성
-    : (YAML + 실제 코드 포함)
+  state Requirements {
+    state "ReqAgent 실행중" as req {
+      : user_story → LLM 호출
+      : UseCaseModelArtifact 생성
+    }
+    state "ValidatorAgent 실행중\n(UC 검증)" as val_uc {
+      : UC artifact만 입력 (context 격리)
+      : _ADVERSARIAL_MANDATE 적용
+      : ValidationReportArtifact 생성
+    }
+    req --> val_uc
   }
-  state "ValidatorAgent 실행중" as val_impl {
-    : Implementation artifact 검증
+
+  state RoutingUC <<choice>>
+  Requirements --> RoutingUC : validation_result 확인
+
+  RoutingUC --> TestDesign : pass
+  RoutingUC --> Requirements : warning/fail\n(iteration_count < max)
+  note on link #FFE0E0
+    iteration_count++
+    _build_user_message() 재작업 모드:
+    이전 UC + fail 사유 포함
+  end note
+  RoutingUC --> MaxRetriesExceeded : warning/fail\n(iteration_count >= max)
+
+  state TestDesign {
+    state "TestAgent 실행중\n(mode=design)" as ta_design {
+      : UC artifact → TestDesignArtifact
+    }
+    state "ValidatorAgent 실행중\n(TD 검증)" as val_td {
+      : TestDesign artifact 검증
+    }
+    ta_design --> val_td
   }
-  code --> val_impl
+
+  state RoutingTD <<choice>>
+  TestDesign --> RoutingTD
+
+  RoutingTD --> Implementation : pass
+  RoutingTD --> TestDesign : warning/fail (재작업)
+  RoutingTD --> MaxRetriesExceeded : 한계 초과
+
+  state Implementation {
+    state "CodeAgent 실행중" as code {
+      : UC + TestDesign → ImplementationArtifact
+      : _CODE_FILE_MANDATE 적용
+      : code_files 포함 (완전한 실행 코드)
+    }
+    state "ValidatorAgent 실행중\n(Impl 검증)" as val_impl {
+      : Impl artifact 검증
+    }
+    code --> val_impl
+  }
+
+  state RoutingImpl <<choice>>
+  Implementation --> RoutingImpl
+
+  RoutingImpl --> TestExecution : pass
+  RoutingImpl --> Implementation : warning/fail (재작업)
+  RoutingImpl --> MaxRetriesExceeded : 한계 초과
+
+  state TestExecution {
+    state "TestAgent 실행중\n(mode=execution)" as ta_exec {
+      : TestDesign + Impl → TestReportArtifact
+    }
+    state "ValidatorAgent 실행중\n(TR 검증)" as val_tr {
+      : TestReport artifact 검증
+    }
+    ta_exec --> val_tr
+  }
+
+  state RoutingTR <<choice>>
+  TestExecution --> RoutingTR
+
+  RoutingTR --> Feedback : pass
+  RoutingTR --> TestExecution : warning/fail (재작업)
+  RoutingTR --> MaxRetriesExceeded : 한계 초과
+
+  state Feedback {
+    state "CoordAgent 실행중" as coord {
+      : TestReport → FeedbackArtifact
+    }
+  }
 }
 
-state ValidationCheck_IMPL <<choice>>
-Implementation --> ValidationCheck_IMPL
-
-ValidationCheck_IMPL --> TestExecution : pass
-ValidationCheck_IMPL --> Implementation : fail (재작업)
-ValidationCheck_IMPL --> Failed : 한계 초과
-
-state TestExecution {
-  state "TestAgent 실행중\n(mode=execution)" as test_exec {
-    : TestDesign + Impl artifact 입력
-    : TestReportArtifact 생성
-  }
-  state "ValidatorAgent 실행중" as val_test_exec {
-    : TestReport artifact 검증
-  }
-  test_exec --> val_test_exec
-}
-
-state ValidationCheck_TR <<choice>>
-TestExecution --> ValidationCheck_TR
-
-ValidationCheck_TR --> Feedback : pass
-ValidationCheck_TR --> TestExecution : fail (재작업)
-ValidationCheck_TR --> Failed : 한계 초과
-
-state Feedback {
-  state "CoordAgent 실행중" as coord {
-    : TestReport artifact 입력
-    : FeedbackArtifact 생성
-  }
-}
-
-Feedback --> Saving
+Running --> Saving : Feedback 완료
 
 state Saving {
   : steps_completed → iteration별 그룹화
   : output/iteration-N/artifacts/*.yaml 저장
-  : output/workspace/ 코드 파일 저장
+  : ImplementationArtifact → code_files 추출
+  : output/workspace/ 에 실행 코드 저장
   : pipeline_status = "completed"
 }
 
-state Failed {
+state MaxRetriesExceeded {
   : pipeline_status = "max_retries_exceeded"
+  : iteration_count >= max_iterations 도달
 }
 
-Saving --> [*] : 완료
-Failed --> [*] : 비정상 종료
+state QuotaExhausted {
+  : QuotaExhaustedError 발생
+  : pipeline_status = "quota_exhausted"
+  : partial artifacts 저장 가능
+  note
+    daily quota 소진 시
+    (not transient rate limit)
+    지금까지 생성된 artifacts는
+    _save_artifacts()로 저장 가능
+  end note
+}
 
-note right of Requirements
-  **Context 격리 원칙**:
-  ValidatorAgent에게는
-  artifact YAML만 전달.
-  이전 Agent의 사고 과정,
-  system_prompt 미포함.
+Running --> QuotaExhausted : QuotaExhaustedError\n(LLM daily quota 소진)
+
+Saving --> [*] : 정상 완료
+MaxRetriesExceeded --> [*] : 비정상 종료 (exit 2)
+QuotaExhausted --> [*] : 중단 종료
+
+note right of Running
+  **validation_result 3가지 값**:
+  - "pass"    → 다음 Phase 진행
+  - "warning" → fail과 동일 처리 (rework)
+  - "fail"    → rework or max_retries
+
+  **iteration_count**:
+  ValidatorAgent가 warning/fail 판정 시
+  +1 증가.
+  max_iterations (기본 3) 초과 시 강제 종료.
 end note
 
-note right of Saving
-  **산출물 구조**:
-  output/
-  ├── iteration-01/artifacts/
-  │   ├── 001_UC-01.yaml
-  │   ├── 002_UC-01-VAL-1.yaml
-  │   └── ...
-  └── workspace/
-      └── (실행 가능한 코드)
+note right of GraphBuilding
+  **lru_cache 동작**:
+  load_all_agents()는 최초 1회만
+  *.config.yaml을 읽고,
+  이후 호출은 캐시 반환.
+  process 재시작 전까지 유효.
+end note
+
+note bottom of Saving
+  **artifact 파일명 규칙**:
+  {local_seq:03d}_{artifact_id}.yaml
+  예: 001_UC-01.yaml
+      002_UC-01-VAL-1.yaml
+      003_IMPL-01.yaml
 end note
 
 @enduml
