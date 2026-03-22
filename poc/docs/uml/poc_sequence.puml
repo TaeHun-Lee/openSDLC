@@ -1,0 +1,160 @@
+@startuml poc_sequence
+title OpenSDLC PoC — 실행 시퀀스 다이어그램 (full_spiral 기준)
+
+skinparam backgroundColor #FAFAFA
+skinparam sequence {
+  ArrowColor #2C3E50
+  ActorBorderColor #2980B9
+  LifeLineBorderColor #7F8C8D
+  ParticipantBorderColor #2980B9
+  ParticipantBackgroundColor #EBF5FB
+  BoxBackgroundColor #FEF9E7
+  DividerBackgroundColor #FDEBD0
+  GroupBorderColor #E74C3C
+  GroupFontColor #C0392B
+}
+
+actor "사용자" as user
+participant "run_poc.py\n(entry)" as entry
+participant "graph_builder" as gb
+participant "LangGraph\nRuntime" as lg
+participant "generic_agent\n(create_agent_node)" as executor
+participant "llm_client\n(call_llm)" as llm
+participant "routing\n(make_validator_router)" as router
+participant "artifact_parser" as parser
+participant "Anthropic/\nGoogle LLM API" as api
+
+user -> entry : python run_poc.py\n--pipeline full_spiral.yaml\n--user-story "..."
+
+entry -> gb : load_pipeline_definition(pipeline_path)
+activate gb
+gb --> entry : PipelineDefinition\n(steps, max_iterations)
+deactivate gb
+
+entry -> gb : run_pipeline(pipeline_def, user_story)
+activate gb
+
+gb -> gb : build_graph_from_definition()
+note right of gb
+  각 step → node_id 생성
+  ValidatorAgent → conditional edge
+  기타 → simple edge
+end note
+
+gb -> lg : compiled.invoke(initial_state)
+activate lg
+
+== Phase 1: Requirements ==
+
+lg -> executor : node_fn(state)\n[step_1_ReqAgent]
+activate executor
+executor -> executor : _build_user_message()\n→ user_story 포함
+executor -> llm : call_llm(system_prompt, user_message)
+activate llm
+llm -> api : messages.create(model=gemini-2.5-pro)
+api --> llm : LLM 응답 텍스트
+llm --> executor : LLMResponse
+deactivate llm
+executor -> parser : extract_yaml_from_response()
+parser --> executor : UseCaseModelArtifact (YAML)
+executor --> lg : state 업데이트\n{steps_completed, latest_artifacts}
+deactivate executor
+
+lg -> executor : node_fn(state)\n[step_2_ValidatorAgent]
+activate executor
+executor -> executor : _build_user_message()\n→ UC artifact만 전달\n(context 격리!)
+executor -> llm : call_llm(system_prompt, uc_artifact_only)
+activate llm
+llm -> api : messages.create(model=gemini-2.5-pro)
+api --> llm : ValidationReport 텍스트
+llm --> executor : LLMResponse
+deactivate llm
+executor -> parser : extract_yaml_from_response()
+executor -> parser : get_validation_result()
+parser --> executor : validation_result: "pass" | "fail"
+executor --> lg : state 업데이트\n{validation_result}
+deactivate executor
+
+lg -> router : route_after_validation(state)
+activate router
+
+alt validation_result == "fail" AND iteration_count < max_iterations
+  router --> lg : "rework"
+  lg -> executor : node_fn(state)\n[step_1_ReqAgent] ← 재진입
+  note right: iteration_count++\n이전 UC + fail 사유 포함하여\n재작업 요청
+else validation_result == "fail" AND iteration_count >= max_iterations
+  router --> lg : "max_retries"
+  lg --> gb : END (강제 종료)
+else validation_result == "pass"
+  router --> lg : "pass"
+end
+deactivate router
+
+== Phase 2: Test Design ==
+
+lg -> executor : node_fn(state)\n[step_3_TestAgent (design)]
+activate executor
+executor -> llm : call_llm(system_prompt,\n  UC artifact)
+llm -> api : messages.create(model=gemini-2.5-flash)
+api --> llm : TestDesignArtifact 텍스트
+llm --> executor : LLMResponse
+executor -> parser : extract_yaml_from_response()
+parser --> executor : TestDesignArtifact (YAML)
+executor --> lg : state 업데이트
+deactivate executor
+
+lg -> executor : node_fn(state)\n[step_4_ValidatorAgent]
+note right: TestDesignArtifact 검증
+lg -> router : route_after_validation(state)
+note right: pass → Phase 3\nfail → step_3_TestAgent 재진입
+
+== Phase 3: Implementation ==
+
+lg -> executor : node_fn(state)\n[step_5_CodeAgent]
+activate executor
+executor -> executor : _build_user_message()\n→ UC + TestDesign artifact 전달
+executor -> llm : call_llm(system_prompt,\n  UC + TestDesign,\n  max_tokens=16384)
+llm -> api : messages.create(model=gemini-2.5-pro)
+api --> llm : ImplementationArtifact 텍스트\n(YAML + 실제 코드)
+llm --> executor : LLMResponse
+executor -> parser : extract_yaml_from_response()
+parser --> executor : ImplementationArtifact (YAML)
+executor --> lg : state 업데이트
+deactivate executor
+
+lg -> executor : node_fn(state)\n[step_6_ValidatorAgent]
+note right: ImplementationArtifact 검증
+lg -> router : route_after_validation(state)
+note right: pass → Phase 4\nfail → step_5_CodeAgent 재진입
+
+== Phase 4: Test Execution ==
+
+lg -> executor : node_fn(state)\n[step_7_TestAgent (execution)]
+note right: TestDesign + Impl artifact 기반\nTestReportArtifact 생성
+
+lg -> executor : node_fn(state)\n[step_8_ValidatorAgent]
+note right: TestReportArtifact 검증
+lg -> router : route_after_validation(state)
+
+== Phase 5: Feedback ==
+
+lg -> executor : node_fn(state)\n[step_9_CoordAgent]
+note right: TestReport → FeedbackArtifact 생성
+
+lg --> gb : final_state
+deactivate lg
+
+gb --> entry : final_state
+deactivate gb
+
+entry -> entry : _save_artifacts(final_state, out_dir)
+note right
+  iteration별 디렉토리 생성:
+  output/iteration-01/artifacts/
+  output/iteration-02/artifacts/
+  output/workspace/ (실행 코드)
+end note
+
+entry --> user : 완료 출력\n(artifacts 경로, 실행 방법)
+
+@enduml

@@ -1,0 +1,145 @@
+@startuml poc_state
+title OpenSDLC PoC — PipelineState 상태 다이어그램
+
+skinparam backgroundColor #FAFAFA
+skinparam state {
+  BackgroundColor #EBF5FB
+  BorderColor #2980B9
+  ArrowColor #2C3E50
+  StartColor #2C3E50
+  EndColor #2C3E50
+}
+
+[*] --> Initialized : run_pipeline() 호출
+
+state Initialized {
+  : user_story = 입력값
+  : steps_completed = []
+  : latest_artifacts = {}
+  : iteration_count = 0
+  : pipeline_status = "running"
+}
+
+Initialized --> Requirements : LangGraph.invoke()
+
+state Requirements {
+  state "ReqAgent 실행중" as req_running {
+    : LLM 독립 호출
+    : UseCaseModelArtifact 생성
+    : latest_artifacts 갱신
+  }
+
+  state "ValidatorAgent 실행중" as val_req {
+    : UC artifact만 입력
+    : ValidationReport 생성
+    : validation_result 추출
+  }
+
+  req_running --> val_req
+}
+
+state ValidationCheck_UC <<choice>>
+Requirements --> ValidationCheck_UC
+
+ValidationCheck_UC --> TestDesign : pass
+ValidationCheck_UC --> Requirements : fail\n(iteration_count < max)
+ValidationCheck_UC --> Failed : fail\n(iteration_count >= max)
+
+state TestDesign {
+  state "TestAgent 실행중\n(mode=design)" as test_design {
+    : UC artifact 입력
+    : TestDesignArtifact 생성
+  }
+  state "ValidatorAgent 실행중" as val_test {
+    : TestDesign artifact 검증
+  }
+  test_design --> val_test
+}
+
+state ValidationCheck_TD <<choice>>
+TestDesign --> ValidationCheck_TD
+
+ValidationCheck_TD --> Implementation : pass
+ValidationCheck_TD --> TestDesign : fail (재작업)
+ValidationCheck_TD --> Failed : 한계 초과
+
+state Implementation {
+  state "CodeAgent 실행중" as code {
+    : UC + TestDesign artifact 입력
+    : ImplementationArtifact 생성
+    : (YAML + 실제 코드 포함)
+  }
+  state "ValidatorAgent 실행중" as val_impl {
+    : Implementation artifact 검증
+  }
+  code --> val_impl
+}
+
+state ValidationCheck_IMPL <<choice>>
+Implementation --> ValidationCheck_IMPL
+
+ValidationCheck_IMPL --> TestExecution : pass
+ValidationCheck_IMPL --> Implementation : fail (재작업)
+ValidationCheck_IMPL --> Failed : 한계 초과
+
+state TestExecution {
+  state "TestAgent 실행중\n(mode=execution)" as test_exec {
+    : TestDesign + Impl artifact 입력
+    : TestReportArtifact 생성
+  }
+  state "ValidatorAgent 실행중" as val_test_exec {
+    : TestReport artifact 검증
+  }
+  test_exec --> val_test_exec
+}
+
+state ValidationCheck_TR <<choice>>
+TestExecution --> ValidationCheck_TR
+
+ValidationCheck_TR --> Feedback : pass
+ValidationCheck_TR --> TestExecution : fail (재작업)
+ValidationCheck_TR --> Failed : 한계 초과
+
+state Feedback {
+  state "CoordAgent 실행중" as coord {
+    : TestReport artifact 입력
+    : FeedbackArtifact 생성
+  }
+}
+
+Feedback --> Saving
+
+state Saving {
+  : steps_completed → iteration별 그룹화
+  : output/iteration-N/artifacts/*.yaml 저장
+  : output/workspace/ 코드 파일 저장
+  : pipeline_status = "completed"
+}
+
+state Failed {
+  : pipeline_status = "max_retries_exceeded"
+}
+
+Saving --> [*] : 완료
+Failed --> [*] : 비정상 종료
+
+note right of Requirements
+  **Context 격리 원칙**:
+  ValidatorAgent에게는
+  artifact YAML만 전달.
+  이전 Agent의 사고 과정,
+  system_prompt 미포함.
+end note
+
+note right of Saving
+  **산출물 구조**:
+  output/
+  ├── iteration-01/artifacts/
+  │   ├── 001_UC-01.yaml
+  │   ├── 002_UC-01-VAL-1.yaml
+  │   └── ...
+  └── workspace/
+      └── (실행 가능한 코드)
+end note
+
+@enduml

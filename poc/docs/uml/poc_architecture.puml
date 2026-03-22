@@ -1,0 +1,90 @@
+@startuml poc_architecture
+title OpenSDLC PoC — 전체 아키텍처 컴포넌트 다이어그램
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FAFAFA
+skinparam component {
+  BackgroundColor #E8F4FD
+  BorderColor #2980B9
+  FontSize 12
+}
+skinparam package {
+  BackgroundColor #FEF9E7
+  BorderColor #F39C12
+}
+skinparam arrow {
+  Color #2C3E50
+  FontSize 10
+}
+
+package "EntryPoint" {
+  [run_poc.py] as entry
+}
+
+package "Pipeline Engine" {
+  [graph_builder.py\n(load_pipeline_definition\nbuild_graph_from_definition\nrun_pipeline)] as graph_builder
+  [routing.py\n(make_validator_router\nroute_after_validation)] as routing
+  [state.py\n(PipelineState\nStepResult)] as state
+}
+
+package "Executor" {
+  [generic_agent.py\n(create_agent_node\n_build_user_message)] as executor
+}
+
+package "Registry" {
+  [agent_registry.py\n(load_all_agents\nget_agent)] as registry
+  [models.py\n(AgentConfig\nStepDefinition\nPipelineDefinition)] as models
+}
+
+package "Prompts" {
+  [builder.py\n(build_system_prompt)] as prompt_builder
+  [loader.py\n(load_agent_prompt\nload_template\nload_constitution)] as prompt_loader
+}
+
+package "Artifacts" {
+  [parser.py\n(extract_yaml_from_response\nparse_artifact\nget_validation_result)] as artifact_parser
+  [code_extractor.py\n(write_code_files\nget_runtime_info)] as code_extractor
+}
+
+package "LLM" {
+  [llm_client.py\n(call_llm)] as llm_client
+}
+
+package "Config Files" {
+  database "pipelines/*.yaml\n(full_spiral, poc_classic)" as pipeline_yaml
+  database "agent-configs/*.yaml" as agent_configs
+  database "prompts/agent/*.md" as agent_prompts
+  database "templates/" as templates
+  database "open-sdlc-constitution/" as constitution
+}
+
+package "Output" {
+  database "output/iteration-N/\nartifacts/*.yaml" as artifacts_out
+  database "output/workspace/\n(코드 파일)" as workspace_out
+}
+
+entry --> graph_builder : load_pipeline_definition()\nrun_pipeline()
+entry --> artifacts_out : _save_artifacts()
+entry --> code_extractor : write_code_files()
+
+graph_builder --> routing : make_validator_router()
+graph_builder --> executor : create_agent_node()
+graph_builder --> state : PipelineState 초기화
+
+executor --> registry : get_agent()
+executor --> prompt_builder : build_system_prompt()
+executor --> llm_client : call_llm()
+executor --> artifact_parser : extract_yaml_from_response()
+
+registry --> agent_configs : 읽기
+registry --> models : AgentConfig 반환
+
+prompt_builder --> prompt_loader : 파일 로드
+prompt_loader --> agent_prompts : 읽기
+prompt_loader --> templates : 읽기
+prompt_loader --> constitution : 읽기
+
+pipeline_yaml --> graph_builder : YAML 파싱
+code_extractor --> workspace_out : 코드 파일 저장
+
+@enduml

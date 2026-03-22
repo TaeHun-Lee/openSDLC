@@ -1,0 +1,161 @@
+@startuml poc_activity
+title OpenSDLC PoC — 파이프라인 액티비티 다이어그램
+
+skinparam backgroundColor #FAFAFA
+skinparam activity {
+  BackgroundColor #EBF5FB
+  BorderColor #2980B9
+  DiamondBackgroundColor #FDEBD0
+  DiamondBorderColor #E67E22
+  ArrowColor #2C3E50
+  FontSize 12
+}
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #F9A825
+}
+
+start
+
+:사용자 입력 수신\n(--user-story, --pipeline);
+
+:pipeline YAML 로드\n(PipelineDefinition 파싱);
+
+:LangGraph 그래프 빌드\n(build_graph_from_definition);
+note right
+  각 step → node 생성
+  ValidatorAgent → conditional edge
+  기타 → simple edge
+end note
+
+:PipelineState 초기화\n{user_story, iteration_count=0,\n latest_artifacts={}, steps_completed=[]};
+
+== Phase 1: Requirements Analysis ==
+
+:ReqAgent 호출\n[독립 LLM API 호출];
+note right
+  system_prompt: req-agent.md
+               + constitution
+               + UC 템플릿
+  user_message: User Story (최초)
+               또는 이전 UC + fail 사유 (재작업)
+end note
+
+:UseCaseModelArtifact (YAML) 생성;
+:latest_artifacts["UseCaseModelArtifact"] 갱신;
+
+:ValidatorAgent 호출\n[독립 LLM API 호출 — context 격리!];
+note right
+  user_message: UC artifact YAML만 전달
+  (ReqAgent의 사고 과정, system_prompt 미포함)
+end note
+
+:ValidationReportArtifact 생성\n(pass | warning | fail);
+
+if (validation_result == "pass"?) then (YES)
+else (NO: fail/warning)
+  if (iteration_count >= max_iterations?) then (YES: 한계 초과)
+    #Pink:파이프라인 강제 종료\n(pipeline_status = "max_retries_exceeded");
+    stop
+  else (NO: 재작업 가능)
+    :iteration_count++;
+    note left: ReqAgent로 루프백
+    backward: ReqAgent 재호출\n(이전 UC + fail 사유 포함);
+  endif
+endif
+
+== Phase 2: Test Design ==
+
+:TestAgent 호출 (mode=design)\n[독립 LLM API 호출];
+note right
+  user_message: UC artifact YAML
+  output: TestDesignArtifact
+end note
+
+:TestDesignArtifact (YAML) 생성;
+
+:ValidatorAgent 호출\n(TestDesign 검증);
+
+if (validation_result == "pass"?) then (YES)
+else (NO)
+  if (iteration_count >= max_iterations?) then (YES)
+    #Pink:파이프라인 강제 종료;
+    stop
+  else (NO)
+    :iteration_count++;
+    backward: TestAgent 재호출;
+  endif
+endif
+
+== Phase 3: Implementation ==
+
+:CodeAgent 호출\n[독립 LLM API 호출];
+note right
+  user_message: UC artifact + TestDesign artifact
+  max_tokens: 16384
+  output: ImplementationArtifact (YAML + 실제 코드)
+end note
+
+:ImplementationArtifact (YAML) 생성;
+
+:ValidatorAgent 호출\n(Implementation 검증);
+
+if (validation_result == "pass"?) then (YES)
+else (NO)
+  if (iteration_count >= max_iterations?) then (YES)
+    #Pink:파이프라인 강제 종료;
+    stop
+  else (NO)
+    :iteration_count++;
+    backward: CodeAgent 재호출;
+  endif
+endif
+
+== Phase 4: Test Execution ==
+
+:TestAgent 호출 (mode=execution)\n[독립 LLM API 호출];
+note right
+  user_message: TestDesign + Implementation artifact
+  output: TestReportArtifact
+end note
+
+:TestReportArtifact (YAML) 생성;
+
+:ValidatorAgent 호출\n(TestReport 검증);
+
+if (validation_result == "pass"?) then (YES)
+else (NO)
+  if (iteration_count >= max_iterations?) then (YES)
+    #Pink:파이프라인 강제 종료;
+    stop
+  else (NO)
+    :iteration_count++;
+    backward: TestAgent 재호출 (execution);
+  endif
+endif
+
+== Phase 5: Feedback ==
+
+:CoordAgent 호출\n[독립 LLM API 호출];
+note right
+  user_message: TestReport artifact
+  output: FeedbackArtifact
+end note
+
+:FeedbackArtifact (YAML) 생성;
+
+== 산출물 저장 ==
+
+:steps_completed → iteration별 그룹화;
+
+:output/iteration-N/artifacts/*.yaml 저장;
+
+:ImplementationArtifact에서\n실행 코드 파일 추출;
+
+:output/workspace/ 에 코드 파일 저장;
+
+#LightGreen:파이프라인 완료\n(pipeline_status = "completed");
+
+stop
+
+@enduml
