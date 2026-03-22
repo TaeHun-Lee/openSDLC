@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from config import LLM_PROVIDER, ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, LOG_LEVEL
+from pipeline.state import PipelineState
 
 
 def setup_logging(level: str) -> None:
@@ -19,7 +20,7 @@ def setup_logging(level: str) -> None:
     )
 
 
-def _save_artifacts(final_state: dict, out_dir: Path) -> None:
+def _save_artifacts(final_state: PipelineState, out_dir: Path) -> None:
     """Save all artifacts from pipeline state.
 
     Artifacts are grouped by iteration into subdirectories:

@@ -127,7 +127,7 @@ def run_pipeline(
     compiled = create_pipeline(pipeline_def)
  
     try:
-        final_state = compiled.invoke(initial_state)
+        final_state: PipelineState = compiled.invoke(initial_state)  # type: ignore[assignment]
     except QuotaExhaustedError as exc:
         print("\n" + "=" * 60)
         print(f"[Pipeline] QUOTA EXHAUSTED — 파이프라인 중단")
