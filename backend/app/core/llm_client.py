@@ -1,0 +1,336 @@
+"""Provider-agnostic LLM client for OpenSDLC.
+
+Supports Anthropic (Claude), Google (Gemini), and OpenAI (GPT).
+Provider is selected via OPENSDLC_LLM_PROVIDER env var or config defaults.
+Includes automatic retry with backoff for rate-limit (429) errors.
+Detects daily quota exhaustion and provides clear error messages.
+"""
+
+import hashlib
+import logging
+import re
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Literal
+
+from app.core.config import (
+    ANTHROPIC_API_KEY,
+    GOOGLE_API_KEY,
+    LLM_PROVIDER,
+    MODEL,
+    OPENAI_API_KEY,
+)
+
+logger = logging.getLogger(__name__)
+
+Provider = Literal["anthropic", "google", "openai"]
+
+
+@dataclass(frozen=True)
+class LLMResponse:
+    """Unified response from any LLM provider."""
+
+    text: str
+    model: str
+    provider: Provider
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+
+
+def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=[{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        messages=[{"role": "user", "content": user_message}],
+    )
+    usage = response.usage
+    return LLMResponse(
+        text=response.content[0].text,
+        model=model,
+        provider="anthropic",
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", None),
+    )
+
+
+_google_cache_store: dict[str, str] = {}
+
+
+def _call_google(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+
+    cache_key = hashlib.sha256(f"{model}:{system}".encode()).hexdigest()[:16]
+    cached_content_name = _google_cache_store.get(cache_key)
+
+    if cached_content_name:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    cached_content=cached_content_name,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            usage = response.usage_metadata
+            cache_read = getattr(usage, "cached_content_token_count", 0) or 0
+            return LLMResponse(
+                text=response.text,
+                model=model,
+                provider="google",
+                input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+                output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+                cache_read_tokens=cache_read or None,
+            )
+        except Exception:
+            logger.debug("Google cached content expired or invalid, recreating")
+            _google_cache_store.pop(cache_key, None)
+
+    try:
+        cache = client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                system_instruction=system,
+            ),
+        )
+        _google_cache_store[cache_key] = cache.name
+        logger.debug("Google cache created: %s", cache.name)
+
+        response = client.models.generate_content(
+            model=model,
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                cached_content=cache.name,
+                max_output_tokens=max_tokens,
+            ),
+        )
+        usage = response.usage_metadata
+        cache_creation = getattr(usage, "cached_content_token_count", 0) or 0
+        return LLMResponse(
+            text=response.text,
+            model=model,
+            provider="google",
+            input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+            output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+            cache_creation_tokens=cache_creation or None,
+        )
+    except Exception as cache_exc:
+        logger.debug("Google caching unavailable (%s), falling back to direct call", cache_exc)
+
+    response = client.models.generate_content(
+        model=model,
+        contents=user_message,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=max_tokens,
+        ),
+    )
+    usage = response.usage_metadata
+    return LLMResponse(
+        text=response.text,
+        model=model,
+        provider="google",
+        input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+        output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+    )
+
+
+def _call_openai(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ],
+    )
+    usage = response.usage
+    return LLMResponse(
+        text=response.choices[0].message.content,
+        model=model,
+        provider="openai",
+        input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+        output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+    )
+
+
+_PROVIDERS: dict[Provider, callable] = {
+    "anthropic": _call_anthropic,
+    "google": _call_google,
+    "openai": _call_openai,
+}
+
+
+def _default_quality_check(response: LLMResponse, min_chars: int) -> str | None:
+    if not response.text or not response.text.strip():
+        return "empty response"
+    if len(response.text.strip()) < min_chars:
+        return f"response too short ({len(response.text.strip())} chars < {min_chars} min)"
+    return None
+
+
+class QuotaExhaustedError(Exception):
+    """Raised when the daily API quota is exhausted."""
+
+    def __init__(self, provider: str, model: str, message: str, retry_after: float | None = None):
+        self.provider = provider
+        self.model = model
+        self.retry_after = retry_after
+        super().__init__(message)
+
+
+def _extract_retry_delay(exc: Exception, default: float = 60.0) -> float:
+    msg = str(exc)
+    m = re.search(r"retry\s*(?:in|Delay[\"']?:\s*[\"']?)\s*([\d.]+)\s*s", msg, re.IGNORECASE)
+    if m:
+        return float(m.group(1)) + 2.0
+    return default
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "resource_exhausted" in msg or "rate" in msg
+
+
+def _is_daily_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "quota" in msg and ("per day" in msg or "free_tier" in msg or "freetier" in msg)
+
+
+def call_llm(
+    system: str,
+    user_message: str,
+    *,
+    model: str | None = None,
+    provider: Provider | None = None,
+    max_tokens: int = 4096,
+    max_retries: int = 2,
+    min_response_chars: int = 500,
+    rate_limit_retries: int = 3,
+    quality_check: Callable[[LLMResponse], str | None] | None = None,
+) -> LLMResponse:
+    """Call LLM with provider-agnostic interface and automatic retry."""
+    resolved_provider = provider or LLM_PROVIDER
+    resolved_model = model or MODEL
+
+    call_fn = _PROVIDERS.get(resolved_provider)
+    if call_fn is None:
+        raise ValueError(
+            f"Unknown LLM provider: {resolved_provider!r}. "
+            f"Supported: {', '.join(_PROVIDERS)}"
+        )
+
+    last_response: LLMResponse | None = None
+
+    for attempt in range(1, max_retries + 2):
+        logger.info(
+            "[LLM] %s/%s — system=%d chars, user=%d chars (attempt %d/%d)",
+            resolved_provider,
+            resolved_model,
+            len(system),
+            len(user_message),
+            attempt,
+            max_retries + 1,
+        )
+
+        response: LLMResponse | None = None
+        for rl_attempt in range(1, rate_limit_retries + 1):
+            try:
+                response = call_fn(system, user_message, resolved_model, max_tokens)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc):
+                    raise
+
+                if _is_daily_quota_error(exc):
+                    delay = _extract_retry_delay(exc)
+                    raise QuotaExhaustedError(
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        message=(
+                            f"Daily API quota exhausted for {resolved_provider}/{resolved_model}. "
+                            f"The free tier limit has been reached. Options:\n"
+                            f"  1. Wait ~{delay:.0f}s and retry\n"
+                            f"  2. Switch to a different provider: "
+                            f"OPENSDLC_LLM_PROVIDER=anthropic|openai\n"
+                            f"  3. Upgrade to a paid API plan\n"
+                            f"Partial pipeline output has been saved."
+                        ),
+                        retry_after=delay,
+                    ) from exc
+
+                if rl_attempt < rate_limit_retries:
+                    delay = _extract_retry_delay(exc)
+                    logger.warning(
+                        "[LLM] Rate limit hit (attempt %d/%d) — waiting %.0fs before retry...",
+                        rl_attempt,
+                        rate_limit_retries,
+                        delay,
+                    )
+                    print(
+                        f"\n[Rate Limit] API 요청 한도 초과 — {delay:.0f}초 후 재시도 "
+                        f"({rl_attempt}/{rate_limit_retries})..."
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+
+        assert response is not None
+        last_response = response
+
+        cache_info = ""
+        if response.cache_read_tokens:
+            cache_info = f", cache_read={response.cache_read_tokens}"
+        elif response.cache_creation_tokens:
+            cache_info = f", cache_created={response.cache_creation_tokens}"
+        logger.info(
+            "[LLM] response — %d chars (in=%s, out=%s tokens%s)",
+            len(response.text),
+            response.input_tokens,
+            response.output_tokens,
+            cache_info,
+        )
+
+        if quality_check is not None:
+            issue = quality_check(response)
+        else:
+            issue = _default_quality_check(response, min_response_chars)
+
+        if issue is None:
+            return response
+
+        if attempt <= max_retries:
+            logger.warning(
+                "[LLM] quality check failed: %s — retrying (%d/%d)",
+                issue,
+                attempt,
+                max_retries,
+            )
+            time.sleep(1)
+        else:
+            logger.warning(
+                "[LLM] quality check failed after %d attempts: %s — returning best effort",
+                max_retries + 1,
+                issue,
+            )
+
+    return last_response  # type: ignore[return-value]

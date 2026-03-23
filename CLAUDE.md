@@ -1,276 +1,312 @@
-# CLAUDE.md — OpenSDLC v1 Implementation Guide
+# CLAUDE.md — OpenSDLC Implementation Guide
 
 이 파일은 Claude CLI(Claude Code)가 프로젝트 진입 시 자동으로 읽는 컨텍스트 파일이다.
-OpenSDLC v1의 방법론 명세를 실행 가능한 코드로 구현하는 작업의 배경, 설계 결정, 구현 전략을 담고 있다.
+OpenSDLC의 아키텍처, 코드 구조, 개발 규칙을 담고 있다.
 
 ---
 
-## 1. 프로젝트 배경
+## 1. 프로젝트 개요
 
 OpenSDLC는 소프트웨어 개발 생명주기(SDLC)의 각 단계를 담당하는 AI Agent들이
-구조화된 아티팩트(YAML)를 통해 유기적으로 협업하는 AI Software Factory 플랫폼이다.
+구조화된 YAML 아티팩트를 통해 협업하는 **AI Software Factory** 플랫폼이다.
+
+### 핵심 설계 원칙: Context 격리
+각 Agent는 **별도의 LLM API 호출**로 실행된다.
+Agent 간에 전달되는 것은 오직 **YAML 아티팩트 문자열**뿐이다.
+- Agent A의 system prompt 내용을 Agent B에게 전달하지 않는다
+- Agent A의 LLM 응답 중 artifact 이외의 내용(사고 과정, 설명 등)을 Agent B에게 전달하지 않는다
+- 하나의 LLM 호출에서 여러 Agent 역할을 수행하게 하지 않는다
 
 ### 현재 상태
-- `core/open-sdlc-constitution/`, `core/open-sdlc-engine/`, `core/open-sdlc-docs/`에 **방법론 명세**가 완성되어 있음 (git submodule로 관리)
-- 6종의 아티팩트 스키마(UC, TEST-DESIGN, IMPL, TEST-EXECUTION, FB, VAL)가 정의됨
-- 12단계 파이프라인에 5개 Validation 게이트가 설계됨
-- **아직 실행 런타임(코드)이 없음** — 현재는 단일 LLM 대화에서 1인다역으로 테스트 중
-
-### 핵심 문제 (구현 동기)
-현재 하나의 LLM이 모든 Agent 역할을 순차적으로 수행하다 보니:
-- ValidatorAgent가 자기가 방금 본 ReqAgent의 사고 과정을 기억한 채로 검증 → 항상 pass
-- "자기가 쓴 답안을 자기가 채점하는" 구조적 한계
-- 이 문제를 **Agent별 독립 context session**으로 해결하는 것이 구현의 핵심 목표
+- **PoC 완성** (`poc/`): CLI로 파이프라인을 실행하는 독립 구현체
+- **Backend 진행 중** (`backend/`): FastAPI로 PoC 엔진을 HTTP/SSE API로 노출하는 서버 (untracked, 개발 중)
+- **방법론 명세** (`core/`): git submodule, 읽기 전용
 
 ---
 
-## 2. 구현 목표: PoC (Proof of Concept)
+## 2. 빌드 및 실행
 
-### PoC 범위
-전체 12단계가 아닌, **최소 3노드 루프**만 먼저 구현한다:
-
+### PoC (CLI)
+```bash
+cd poc
+pip install -e ".[all-llm]"    # 또는 .[anthropic], .[google], .[openai]
+cp .env.example .env           # API 키 설정
+python run_poc.py --pipeline pipelines/poc_classic.yaml \
+  --user-story "할 일 관리 앱을 만들어줘"
 ```
-ReqAgent → ValidatorAgent → (fail 시) ReqAgent 재작업
-                           → (pass 시) CodeAgent
+
+### Backend (FastAPI)
+```bash
+cd backend
+pip install -e .
+python run_server.py --reload   # http://localhost:8000
+# POST /api/runs  →  시작
+# GET  /api/runs/{id}/events  →  SSE 스트림
 ```
 
-### PoC 성공 기준
-1. ValidatorAgent가 결함 있는 UC artifact에 대해 **실제로 `fail`을 판정**하는 것
-2. fail 판정 후 ReqAgent가 재작업하여 **품질이 향상**되는 것
-3. 위 과정에서 각 Agent가 **독립된 LLM API 호출**로 실행되어, 서로의 context를 공유하지 않는 것
+### 테스트
+```bash
+cd poc && pytest tests/
+```
 
-### PoC에 포함하지 않는 것
-- TestAgent, CoordAgent, PMAgent 구현
-- GUI 프론트엔드
-- 다중 iteration (Spiral 반복)
-- 프로젝트 관리 기능
+### 환경변수
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `OPENSDLC_LLM_PROVIDER` | `google` | LLM 제공자: `anthropic` / `google` / `openai` |
+| `OPENSDLC_MODEL` | 제공자별 기본 | 모델 오버라이드 (예: `claude-sonnet-4-6`) |
+| `ANTHROPIC_API_KEY` | | Anthropic API 키 |
+| `GOOGLE_API_KEY` | | Google AI API 키 |
+| `OPENAI_API_KEY` | | OpenAI API 키 |
+| `OPENSDLC_MAX_ITERATIONS` | `3` | 최대 spiral iteration 수 |
+| `OPENSDLC_LLM_MAX_RETRIES` | `2` | LLM 품질 재시도 횟수 |
+| `OPENSDLC_LOG_LEVEL` | `INFO` | 로깅 레벨 |
+| `OPENSDLC_LOG_LLM_IO` | `true` | LLM 입출력 로깅 토글 |
 
 ---
 
 ## 3. 기술 스택
 
-| 구성요소 | 기술 | 이유 |
+| 구성요소 | 기술 | 비고 |
 |----------|------|------|
-| Agent 오케스트레이션 | **LangGraph** | 상태 머신 기반, 조건부 라우팅(pass/fail), 체크포인트 |
-| LLM API | **Anthropic Claude API** | 프로젝트 주력 모델 |
-| API 서버 | **FastAPI** (PoC 후반부) | WebSocket 지원, 비동기 |
-| 런타임 | **Python 3.11+** | LangGraph/LangChain 호환 |
+| Agent 오케스트레이션 | **LangGraph** | StateGraph 기반, 조건부 라우팅(pass/fail) |
+| LLM API | **Anthropic / Google / OpenAI** | 멀티 프로바이더 지원, 런타임에 선택 |
+| API 서버 | **FastAPI + Uvicorn** | SSE 스트리밍, 비동기 실행 |
+| 런타임 | **Python 3.11+** | type hints 필수 |
+| 데이터 모델 | **Pydantic v2** | AgentConfig, StepDefinition, API 모델 |
+| 아티팩트 형식 | **YAML (pyyaml)** | 모든 Agent 입출력 |
 
 ---
 
-## 4. 아키텍처 핵심: Context 격리
-
-### 원칙
-각 Agent는 **별도의 LLM API 호출(messages.create)**로 실행된다.
-Agent 간에 전달되는 것은 오직 **YAML 아티팩트 문자열**뿐이다.
-
-### ReqAgent 호출 구조
-```
-system_prompt: core/open-sdlc-engine/prompts/agent/req-agent.md 내용
-               + core/open-sdlc-constitution/ 핵심 원칙 발췌
-               + core/open-sdlc-engine/templates/UseCaseModelArtifact 템플릿
-user_message:  사용자의 User Story (최초)
-               또는 ValidatorAgent의 fail 사유 + 이전 UC artifact (재작업 시)
-output:        UseCaseModelArtifact (YAML)
-```
-
-### ValidatorAgent 호출 구조
-```
-system_prompt: core/open-sdlc-engine/prompts/agent/validator-agent.md 내용
-               + core/open-sdlc-constitution/ 검증 기준
-               + core/open-sdlc-engine/templates/ValidationReportArtifact 템플릿
-               + core/open-sdlc-engine/templates/UseCaseModelArtifact 템플릿 (스키마 참조용)
-user_message:  ReqAgent가 생성한 UC artifact(YAML) ← 이것만!
-               (ReqAgent의 system prompt, 사고 과정, 중간 응답은 절대 포함하지 않음)
-output:        ValidationReportArtifact (YAML) with validation_result: pass|warning|fail
-```
-
-### CodeAgent 호출 구조 (ValidatorAgent pass 이후)
-```
-system_prompt: core/open-sdlc-engine/prompts/agent/code-agent.md 내용
-               + 기술 스택 제약사항
-user_message:  승인된 UC artifact(YAML)
-output:        ImplementationArtifact (YAML) + 실제 코드 파일
-```
-
-### 핵심 금지사항
-- Agent A의 system prompt 내용을 Agent B에게 전달하지 않는다
-- Agent A의 LLM 응답 중 artifact 이외의 내용(사고 과정, 설명 등)을 Agent B에게 전달하지 않는다
-- 하나의 messages.create 호출에서 여러 Agent 역할을 수행하게 하지 않는다
-
----
-
-## 5. LangGraph 구현 설계
-
-### State 정의
-```python
-from typing import TypedDict, Literal
-
-class PipelineState(TypedDict):
-    user_story: str                          # 원본 사용자 요청
-    uc_artifact: str                         # UseCaseModelArtifact YAML
-    validation_report: str                   # ValidationReportArtifact YAML
-    validation_result: Literal["pass", "warning", "fail"]
-    impl_artifact: str                       # ImplementationArtifact YAML
-    iteration_count: int                     # 재작업 횟수 (무한루프 방지)
-    max_iterations: int                      # 최대 재작업 횟수 (기본 3)
-```
-
-### Graph 구조
-```python
-from langgraph.graph import StateGraph, END
-
-graph = StateGraph(PipelineState)
-
-graph.add_node("req_agent", req_agent_node)
-graph.add_node("validator_agent", validator_agent_node)
-graph.add_node("code_agent", code_agent_node)
-
-graph.set_entry_point("req_agent")
-graph.add_edge("req_agent", "validator_agent")
-
-# 조건부 라우팅: pass → code_agent, fail → req_agent (재작업)
-graph.add_conditional_edges(
-    "validator_agent",
-    route_after_validation,
-    {
-        "pass": "code_agent",
-        "rework": "req_agent",
-        "max_retries": END,
-    }
-)
-graph.add_edge("code_agent", END)
-```
-
-### 라우팅 함수
-```python
-def route_after_validation(state: PipelineState) -> str:
-    if state["validation_result"] == "pass":
-        return "pass"
-    if state["iteration_count"] >= state["max_iterations"]:
-        return "max_retries"
-    return "rework"
-```
-
----
-
-## 6. ValidatorAgent 검증력 강화 전략
-
-단순한 context 격리만으로는 부족할 수 있다. 다음 기법을 적용한다:
-
-### Adversarial Prompting
-ValidatorAgent의 system prompt에 다음을 포함:
-- "pass를 내기 전에 반드시 fail 사유 후보를 3개 이상 나열하라"
-- "그 중 blocking 사유가 하나도 없을 때만 pass로 판정하라"
-- "schema 미준수, 누락 필드, 모호한 acceptance criteria는 무조건 fail"
-
-### 체크리스트 강제
-v1의 6가지 감사 기준을 항목별로 점검하고 결과를 채우게 한다:
-1. schema: 템플릿 필수 필드 모두 존재하는가
-2. traceability: source_artifact_ids가 올바르게 참조되는가
-3. evidence: 주장에 대한 근거가 있는가
-4. decision_consistency: 판정이 논리적으로 일관되는가
-5. role_boundary: Agent가 자기 역할 범위를 벗어나지 않았는가
-6. no_regression: 기존 통과 항목을 훼손하지 않았는가
-
----
-
-## 7. 프로젝트 디렉토리 구조
+## 4. 프로젝트 디렉토리 구조
 
 ```
-open-sdlc-v1/
-├── CLAUDE.md                        ← 이 파일 (Claude CLI 컨텍스트)
-├── core/                            ← git submodule (open-sdlc-v1 레포)
-│   ├── AGENTS.md                    ← OpenSDLC Agent 규칙
-│   ├── open-sdlc-constitution/      ← 거버넌스 규칙
-│   ├── open-sdlc-engine/            ← 방법론 명세
-│   │   ├── core-concepts/
-│   │   ├── prompts/
-│   │   └── templates/
-│   └── open-sdlc-docs/              ← 참고 문서
+openSDLC/
+├── CLAUDE.md                           ← 이 파일
+├── core/                               ← git submodule (읽기 전용)
+│   ├── open-sdlc-constitution/         ← 거버넌스 규칙 (01~05.md)
+│   ├── open-sdlc-engine/
+│   │   ├── agent-configs/              ← Agent 설정 YAML (*.config.yaml)
+│   │   ├── core-concepts/              ← 방법론 명세
+│   │   ├── prompts/agent/              ← Agent별 시스템 프롬프트 (.txt)
+│   │   └── templates/artifacts/        ← 아티팩트 YAML 템플릿
+│   └── open-sdlc-docs/                 ← 참고 문서
 │
-├── poc/                             ← 신규: PoC 구현 코드
-│   ├── pyproject.toml               # 의존성 관리
+├── poc/                                ← PoC CLI 구현 (완성)
+│   ├── pyproject.toml
+│   ├── run_poc.py                      ← CLI 엔트리포인트
+│   ├── pipelines/                      ← 파이프라인 정의 YAML
+│   │   ├── poc_classic.yaml            ← 3단계: Req→Val→Code
+│   │   └── full_spiral.yaml            ← 12단계 full SDLC
+│   ├── agent-config-overrides/         ← Agent별 오버레이 설정
 │   ├── src/
-│   │   ├── graph.py                 # LangGraph 파이프라인 정의
-│   │   ├── nodes/
-│   │   │   ├── req_agent.py         # ReqAgent 노드
-│   │   │   ├── validator_agent.py   # ValidatorAgent 노드
-│   │   │   └── code_agent.py        # CodeAgent 노드
+│   │   ├── config.py                   ← 환경변수, 경로 설정
+│   │   ├── llm_client.py              ← 멀티 프로바이더 LLM 클라이언트
+│   │   ├── pipeline/
+│   │   │   ├── state.py               ← PipelineState TypedDict
+│   │   │   ├── graph_builder.py       ← YAML→LangGraph 컴파일러
+│   │   │   └── routing.py            ← Validator 조건부 라우팅
+│   │   ├── executor/
+│   │   │   └── generic_agent.py       ← 범용 Agent 노드 팩토리
 │   │   ├── prompts/
-│   │   │   ├── loader.py            # 프롬프트/템플릿 파일 로더
-│   │   │   └── builder.py           # Agent별 프롬프트 조립기
+│   │   │   ├── loader.py              ← core/ 파일 로더 (캐싱)
+│   │   │   ├── builder.py            ← system prompt 조립기
+│   │   │   ├── message_strategies.py  ← user message 전략 패턴
+│   │   │   └── mandates/             ← 특수 지시문 (adversarial 등)
 │   │   ├── artifacts/
-│   │   │   ├── parser.py            # YAML artifact 파싱
-│   │   │   └── validator.py         # 스키마 검증 유틸
-│   │   └── config.py                # LLM 설정, 모델 선택
-│   ├── tests/
-│   │   ├── test_context_isolation.py # context 격리 검증 테스트
-│   │   └── test_validation_quality.py # Validator가 fail을 내는지 테스트
-│   └── run_poc.py                   # PoC 실행 엔트리포인트
+│   │   │   ├── parser.py             ← YAML 추출/파싱/복구
+│   │   │   └── code_extractor.py     ← 코드 파일 추출
+│   │   ├── registry/
+│   │   │   ├── models.py             ← AgentConfig, StepDefinition, PipelineDefinition
+│   │   │   └── agent_registry.py     ← Agent 설정 로딩/조회
+│   │   └── reporting/
+│   │       └── event_parser.py       ← Agent 서사 이벤트 파싱
+│   └── tests/
+│       ├── test_context_isolation.py
+│       └── test_validation_quality.py
 │
-└── workspace/                       ← 런타임 산출물 (gitignore)
+├── backend/                            ← FastAPI 서버 (개발 중)
+│   ├── pyproject.toml
+│   ├── run_server.py                   ← 서버 엔트리포인트
+│   ├── pipelines/                      ← 서버용 파이프라인 정의
+│   ├── agent-config-overrides/         ← 서버용 Agent 오버레이
+│   └── app/
+│       ├── main.py                     ← FastAPI 앱 팩토리
+│       ├── models/                     ← 요청/응답 Pydantic 모델
+│       ├── routers/                    ← API 엔드포인트
+│       │   ├── health.py              ← GET /api/health
+│       │   ├── pipelines.py           ← GET /api/pipelines
+│       │   ├── agents.py              ← GET /api/agents
+│       │   └── runs.py               ← POST/GET /api/runs, SSE
+│       ├── services/
+│       │   ├── run_manager.py         ← 비동기 파이프라인 실행 관리
+│       │   ├── event_bus.py           ← 스레드-안전 SSE 이벤트 버스
+│       │   └── print_capture.py       ← print() → SSE 브릿지
+│       └── core/                       ← poc/src/와 동일 구조 (복제)
+│           ├── config.py
+│           ├── llm_client.py
+│           ├── pipeline/
+│           ├── executor/
+│           ├── prompts/
+│           ├── artifacts/
+│           ├── registry/
+│           └── reporting/
+│
+├── examples/                           ← 사용 예제
+└── workspace/                          ← 런타임 산출물 (gitignored)
 ```
 
 ---
 
-## 8. 구현 순서
+## 5. 아키텍처
 
-### Step 1: 프로젝트 셋업
-- `poc/` 디렉토리 생성
-- pyproject.toml에 의존성 정의: langgraph, langchain-anthropic, pyyaml
-- config.py에 Anthropic API 키 로딩 및 모델 설정
+### 5.1 파이프라인 정의 (YAML-driven)
 
-### Step 2: 프롬프트 로더 구현
-- `core/open-sdlc-engine/prompts/agent/` 에서 Agent별 시스템 프롬프트 읽기
-- `core/open-sdlc-engine/templates/` 에서 아티팩트 템플릿 읽기
-- `core/open-sdlc-constitution/` 에서 핵심 원칙 발췌 읽기
-- 이들을 조합하여 각 Agent의 최종 system prompt를 빌드하는 builder
+파이프라인은 `pipelines/*.yaml`에 선언적으로 정의한다. 코드 수정 없이 파이프라인 구성 변경 가능:
 
-### Step 3: ReqAgent 노드 구현
-- 독립 LLM API 호출로 UC artifact(YAML) 생성
-- 재작업 모드: 이전 UC + fail 사유를 입력으로 받아 개선된 UC 생성
+```yaml
+name: poc-classic
+max_iterations: 3
+max_reworks_per_gate: 3
+steps:
+  - step: 1
+    agent: ReqAgent
+  - step: 2
+    agent: ValidatorAgent
+    on_fail: ReqAgent          # fail 시 rework 대상
+  - step: 3
+    agent: CodeAgent
+    max_tokens: 16384
+```
 
-### Step 4: ValidatorAgent 노드 구현
-- 독립 LLM API 호출로 ValidationReport(YAML) 생성
-- UC artifact만 입력으로 받음 (ReqAgent의 context는 전달하지 않음)
-- Adversarial prompting + 체크리스트 강제 적용
+`graph_builder.py`가 YAML을 LangGraph `StateGraph`로 컴파일한다.
 
-### Step 5: LangGraph 파이프라인 연결
-- req_agent → validator_agent → 조건부 라우팅(pass/fail)
-- fail 시 재작업 루프, max_iterations 초과 시 강제 종료
+### 5.2 Agent 실행 흐름
 
-### Step 6: 검증 테스트
-- 의도적으로 모호한 User Story 입력 → fail이 나오는지 확인
-- 명확한 User Story 입력 → pass가 나오는지 확인
-- fail → 재작업 → pass 루프가 동작하는지 확인
+```
+PipelineDefinition (YAML)
+  → graph_builder: StepDefinition마다 create_agent_node() 호출
+    → generic_agent.py: Agent 노드 클로저 생성
+      1. agent_registry에서 AgentConfig 로딩 (core/ + overrides 병합)
+      2. builder.py로 system prompt 조립
+      3. message_strategies.py로 user message 구성
+      4. llm_client.call_llm()으로 LLM 호출 (context 격리)
+      5. artifacts/parser.py로 응답 파싱 (narrative + YAML 분리)
+      6. PipelineState 업데이트 반환
+```
+
+### 5.3 Agent 목록 (6종)
+
+| Agent | 역할 | 출력 아티팩트 |
+|-------|------|---------------|
+| PMAgent | 프로젝트 관리, iteration 평가 | iteration_assessment |
+| ReqAgent | 요구사항 분석 | UseCaseModelArtifact |
+| ValidatorAgent | 아티팩트 검증 (게이트) | ValidationReportArtifact |
+| CodeAgent | 코드 구현 | ImplementationArtifact |
+| TestAgent | 테스트 설계/실행 (dual mode) | TestDesignArtifact / TestReportArtifact |
+| CoordAgent | 이터레이션 피드백 | FeedbackArtifact |
+
+Agent 설정은 `core/open-sdlc-engine/agent-configs/*.config.yaml`에 정의되고,
+`poc/agent-config-overrides/` (또는 `backend/agent-config-overrides/`)로 오버레이된다.
+
+### 5.4 LLM 호출 구조
+
+`llm_client.py`는 3개 프로바이더를 통합한다:
+- **Anthropic**: 프롬프트 캐싱 (`cache_control: ephemeral`)
+- **Google (Gemini)**: `CachedContent` API 활용
+- **OpenAI**: 표준 chat completions
+
+공통 기능: 품질 검사 (최소 응답 길이), rate-limit 자동 재시도, 일일 quota 탐지.
+
+### 5.5 ValidatorAgent 강화
+
+- **Adversarial prompting** (`adversarial_mandate.md`): "pass 전 fail 후보 3개 나열" 강제
+- **Context 격리**: artifact YAML만 전달, 이전 agent의 사고 과정 미포함
+- **체크리스트 강제**: schema, traceability, evidence, decision_consistency, role_boundary, no_regression
+
+### 5.6 Backend API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/health` | 헬스체크 + 현재 LLM 설정 |
+| GET | `/api/pipelines` | 사용 가능한 파이프라인 목록 |
+| GET | `/api/pipelines/{name}` | 파이프라인 상세 (steps 포함) |
+| GET | `/api/agents` | 등록된 Agent 목록 |
+| POST | `/api/runs` | 파이프라인 실행 시작 (비동기) |
+| GET | `/api/runs` | 실행 목록 |
+| GET | `/api/runs/{id}` | 실행 상세 |
+| GET | `/api/runs/{id}/events` | SSE 실시간 이벤트 스트림 |
+| GET | `/api/runs/{id}/artifacts` | 산출물 (YAML + 코드 파일) |
+
+실행은 `RunManager`가 `asyncio.to_thread`로 동기 LangGraph를 비동기로 래핑하고,
+`print_capture.py`가 print() 출력을 `EventBus` → SSE 스트림으로 브릿지한다.
 
 ---
 
-## 9. 기존 v1 파일 참조 규칙
+## 6. 핵심 데이터 모델
 
-구현 시 다음 기존 파일들을 반드시 참조한다:
+### PipelineState (LangGraph state)
+```python
+class PipelineState(TypedDict):
+    user_story: str                      # 원본 사용자 요청
+    steps_completed: list[StepResult]    # 실행된 step 이력
+    latest_artifacts: dict[str, str]     # artifact_type → 최신 YAML
+    current_step_index: int              # 현재 step 위치
+    iteration_count: int                 # spiral iteration 번호
+    max_iterations: int                  # 최대 spiral 반복
+    rework_count: int                    # 현재 gate의 rework 횟수
+    max_reworks_per_gate: int            # gate당 최대 rework
+    pipeline_status: str                 # running|completed|max_retries_exceeded
+```
+
+### 설정 모델 (Pydantic)
+- `AgentConfig`: Agent 설정 (persona, prompts, inputs/outputs, overrides)
+- `StepDefinition`: 파이프라인 단계 (agent, model, on_fail, mode 등)
+- `PipelineDefinition`: 파이프라인 전체 (name, steps, limits)
+
+---
+
+## 7. core/ submodule 참조 규칙
 
 | 용도 | 경로 |
 |------|------|
 | Agent 역할 정의 | `core/open-sdlc-engine/core-concepts/agent-definitions.md` |
 | 파이프라인 워크플로우 | `core/open-sdlc-engine/core-concepts/workflow.md` |
 | 핵심 설계 원칙 | `core/open-sdlc-engine/core-concepts/core-concept.md` |
-| Agent별 프롬프트 | `core/open-sdlc-engine/prompts/agent/` |
-| 시스템 프롬프트 | `core/open-sdlc-engine/prompts/system/` |
-| 아티팩트 템플릿 | `core/open-sdlc-engine/templates/` |
-| 헌법 (최상위 규범) | `core/open-sdlc-constitution/` |
+| Agent 설정 파일 | `core/open-sdlc-engine/agent-configs/*.config.yaml` |
+| Agent별 프롬프트 | `core/open-sdlc-engine/prompts/agent/*.txt` |
+| 아티팩트 템플릿 | `core/open-sdlc-engine/templates/artifacts/*.yaml` |
+| 헌법 (거버넌스) | `core/open-sdlc-constitution/01~05-*.md` |
 
-**주의**: 이 파일들의 내용을 임의로 수정하지 않는다.
-PoC 코드는 이 파일들을 "읽기 전용 입력"으로 사용하여 프롬프트를 조립한다.
+**절대 수정 금지**: core/ 내 파일을 임의로 수정하지 않는다.
+코드는 이 파일들을 "읽기 전용 입력"으로 사용하여 프롬프트를 조립한다.
 
 ---
 
-## 10. 코딩 규칙
+## 8. 코딩 규칙
 
-- Python 3.11+ 기준, type hints 필수
-- 각 Agent 노드는 순수 함수로 구현 (side effect 없음, state in → state out)
-- LLM API 호출은 반드시 `async`로 구현
-- YAML 파싱에는 `pyyaml` 사용, 스키마 검증에는 `pydantic` 사용
-- 모든 LLM 호출의 입력/출력을 로깅 (디버깅 및 context 격리 검증용)
-- 환경변수: `ANTHROPIC_API_KEY`로 API 키 관리
+- Python 3.11+, type hints 필수
+- Agent 노드는 순수 함수: `PipelineState → dict` (부분 state 업데이트)
+- LLM 호출은 `llm_client.call_llm()` 통해서만 수행 (동기, 프로바이더 추상화)
+- YAML 파싱: `pyyaml`, 스키마: `pydantic v2`
+- 모든 LLM 입출력 로깅 (context 격리 검증용)
+- Agent별 로직은 if/elif 분기가 아닌 **config-driven + strategy pattern** 사용
+  - system prompt: `builder.py` (AgentConfig 기반 조립)
+  - user message: `message_strategies.py` (strategy key로 디스패치)
+- `poc/` 와 `backend/app/core/`는 현재 코드 복제 관계 — 향후 패키지 통합 예정
+
+---
+
+## 9. 파이프라인 확장 가이드
+
+### 새 Agent 추가
+1. `core/open-sdlc-engine/agent-configs/`에 `{AgentId}.config.yaml` 확인
+2. `poc/agent-config-overrides/`에 `{AgentId}.override.yaml` 작성 (constitution_sections, mandate_files, user_message_strategy)
+3. 필요 시 `message_strategies.py`에 전략 함수 추가
+4. `pipelines/*.yaml`에 step 추가
+
+### 새 파이프라인 정의
+`pipelines/` 디렉토리에 YAML 파일 추가 — 기존 Agent를 조합하여 새 워크플로우 구성.
+`on_fail`로 ValidatorAgent의 rework 대상을 지정한다.
+
+### 새 LLM 프로바이더 추가
+`llm_client.py`에 `_call_{provider}()` 함수 추가 후 `_PROVIDERS` dict에 등록.

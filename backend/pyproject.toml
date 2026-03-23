@@ -1,0 +1,28 @@
+[project]
+name = "opensdlc-backend"
+version = "0.1.0"
+description = "OpenSDLC FastAPI backend — wraps PoC pipeline as HTTP/SSE service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    # PoC runtime deps (needed since we import poc/src modules)
+    "langgraph>=0.2.0",
+    "langchain-anthropic>=0.3.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40.0"]
+google = ["google-genai>=1.0.0"]
+openai = ["openai>=1.0.0"]
+all-llm = ["anthropic>=0.40.0", "google-genai>=1.0.0", "openai>=1.0.0"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

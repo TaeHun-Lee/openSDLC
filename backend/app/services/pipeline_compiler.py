@@ -1,0 +1,179 @@
+"""Pipeline compiler — validates user input, auto-infers on_fail, serializes to YAML."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from app.core.registry.agent_registry import load_all_agents
+from app.core.registry.models import PipelineDefinition, StepDefinition
+from app.models.requests import CreatePipelineRequest, PipelineStepInput
+
+_VALID_PROVIDERS = {"anthropic", "google", "openai"}
+
+
+def validate_pipeline_request(
+    steps: list[PipelineStepInput],
+) -> list[str]:
+    """Validate pipeline step inputs. Returns list of error strings (empty = OK)."""
+    errors: list[str] = []
+    available_agents = set(load_all_agents().keys())
+
+    for i, step in enumerate(steps, start=1):
+        pos = f"step {i}"
+
+        # Agent must exist in registry
+        if step.agent not in available_agents:
+            errors.append(
+                f"{pos}: unknown agent '{step.agent}'. "
+                f"Available: {sorted(available_agents)}"
+            )
+
+        # TestAgent requires mode
+        if step.agent == "TestAgent" and step.mode not in ("design", "execution"):
+            errors.append(
+                f"{pos}: TestAgent requires mode='design' or mode='execution', "
+                f"got {step.mode!r}"
+            )
+
+        # ValidatorAgent cannot be first step (no on_fail target)
+        if step.agent == "ValidatorAgent" and i == 1:
+            errors.append(
+                f"{pos}: ValidatorAgent cannot be the first step "
+                f"(no preceding agent for rework)"
+            )
+
+        # ValidatorAgent needs a preceding non-Validator
+        if step.agent == "ValidatorAgent" and i > 1:
+            has_target = any(
+                s.agent != "ValidatorAgent" for s in steps[:i - 1]
+            )
+            if not has_target:
+                errors.append(
+                    f"{pos}: ValidatorAgent has no preceding non-Validator agent "
+                    f"to use as rework target"
+                )
+
+        # Provider must be valid if specified
+        if step.provider and step.provider not in _VALID_PROVIDERS:
+            errors.append(
+                f"{pos}: invalid provider '{step.provider}'. "
+                f"Valid: {sorted(_VALID_PROVIDERS)}"
+            )
+
+    return errors
+
+
+def compile_pipeline(request: CreatePipelineRequest) -> PipelineDefinition:
+    """Compile user request into a PipelineDefinition with auto-inferred fields.
+
+    Auto-infers:
+    - step numbers (1-based from array order)
+    - ValidatorAgent on_fail (nearest preceding non-Validator)
+    - PMAgent on_next_iteration (if last step + ReqAgent exists)
+    """
+    compiled_steps: list[StepDefinition] = []
+
+    for i, step_input in enumerate(request.steps):
+        step_num = i + 1
+        on_fail: str | None = None
+        on_next_iteration: str | None = None
+
+        # Auto-infer on_fail for ValidatorAgent
+        if step_input.agent == "ValidatorAgent":
+            for j in range(i - 1, -1, -1):
+                if request.steps[j].agent != "ValidatorAgent":
+                    on_fail = request.steps[j].agent
+                    break
+
+        # Auto-infer on_next_iteration for PMAgent if it's the last step
+        if step_input.agent == "PMAgent" and i == len(request.steps) - 1:
+            req_agents = [s for s in request.steps if s.agent == "ReqAgent"]
+            if req_agents:
+                on_next_iteration = "ReqAgent"
+
+        compiled_steps.append(
+            StepDefinition(
+                step=step_num,
+                agent=step_input.agent,
+                model=step_input.model,
+                provider=step_input.provider,
+                on_fail=on_fail,
+                on_next_iteration=on_next_iteration,
+                mode=step_input.mode,
+                max_tokens=step_input.max_tokens,
+            )
+        )
+
+    return PipelineDefinition(
+        name=request.name,
+        description=request.description,
+        max_iterations=request.max_iterations,
+        max_reworks_per_gate=request.max_reworks_per_gate,
+        steps=compiled_steps,
+    )
+
+
+def save_pipeline_yaml(path: Path, pipeline_def: PipelineDefinition) -> None:
+    """Serialize PipelineDefinition to a YAML file."""
+    data = pipeline_def.model_dump(exclude_none=True)
+    # Exclude defaults that match StepDefinition defaults to keep YAML clean
+    for step in data.get("steps", []):
+        if step.get("max_tokens") == 8192:
+            del step["max_tokens"]
+        if step.get("min_response_chars") == 1000:
+            del step["min_response_chars"]
+    path.write_text(
+        yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def load_and_merge_update(
+    existing_path: Path,
+    description: str | None,
+    max_iterations: int | None,
+    max_reworks_per_gate: int | None,
+    steps: list[PipelineStepInput] | None,
+) -> CreatePipelineRequest:
+    """Load existing pipeline YAML and merge update fields into a CreatePipelineRequest.
+
+    If steps is provided, replaces entire step list (triggers recompilation).
+    Otherwise, only metadata fields are updated.
+    """
+    raw = yaml.safe_load(existing_path.read_text(encoding="utf-8"))
+    name = existing_path.stem
+
+    # Merge metadata
+    merged_desc = description if description is not None else raw.get("description", "")
+    merged_iter = max_iterations if max_iterations is not None else raw.get("max_iterations", 3)
+    merged_reworks = (
+        max_reworks_per_gate
+        if max_reworks_per_gate is not None
+        else raw.get("max_reworks_per_gate", 3)
+    )
+
+    # Merge steps
+    if steps is not None:
+        merged_steps = steps
+    else:
+        # Convert existing YAML steps back to PipelineStepInput
+        merged_steps = [
+            PipelineStepInput(
+                agent=s["agent"],
+                model=s.get("model"),
+                provider=s.get("provider"),
+                mode=s.get("mode"),
+                max_tokens=s.get("max_tokens", 8192),
+            )
+            for s in raw.get("steps", [])
+        ]
+
+    return CreatePipelineRequest(
+        name=name,
+        description=merged_desc,
+        max_iterations=merged_iter,
+        max_reworks_per_gate=merged_reworks,
+        steps=merged_steps,
+    )
