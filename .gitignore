@@ -31,8 +31,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Output
-output/artifacts/
+# Output (pipeline artifacts, workspace code)
+poc/output/
+workspace/
 
 # Editors
 .vscode/

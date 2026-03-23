@@ -45,8 +45,18 @@ def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:
         yaml_part = _strip_extra_documents(yaml_part)
         return narrative, yaml_part
 
-    # Fallback: no narrative found, entire text is yaml
-    return "", _strip_extra_documents(response_text.strip())
+    # Fallback: no artifact_id found — check if it's actually YAML
+    text = response_text.strip()
+    try:
+        data = yaml.safe_load(text)
+        if isinstance(data, dict) and "artifact_id" in data:
+            # Valid YAML artifact without preceding narrative
+            return "", _strip_extra_documents(text)
+    except yaml.YAMLError:
+        pass
+
+    # Not a YAML artifact — treat entire response as narrative (e.g. PMAgent reports)
+    return text, ""
 
 
 def extract_yaml_from_response(response_text: str) -> str:

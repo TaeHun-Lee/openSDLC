@@ -79,6 +79,11 @@ def create_agent_node(
     output_type = _resolve_output_type(agent_config, step)
 
     def node_fn(state: PipelineState) -> dict:
+        # Resolve {NN} placeholder in output_type with actual iteration
+        resolved_output_type = output_type.replace(
+            "{NN}", f"{state['iteration_count']:02d}"
+        )
+
         user_message = build_user_message(agent_config, step, state)
 
         response = call_llm(
@@ -99,7 +104,7 @@ def create_agent_node(
             print(f"\n{formatted}")
         else:
             # Fallback: minimal progress indicator if agent didn't produce narrative
-            print(f"\n[{step.agent}] Step {step.step} ({output_type})")
+            print(f"\n[{step.agent}] Step {step.step} ({resolved_output_type})")
 
         # Parse structured reporting events from narrative
         reporting_events = parse_reporting_events(narrative)
@@ -134,14 +139,14 @@ def create_agent_node(
             step_id=step_node_id,
             agent_id=step.agent,
             artifact_yaml=artifact_yaml,
-            artifact_type=output_type,
+            artifact_type=resolved_output_type,
             model_used=response.model,
             validation_result=validation_result,
             narrative=narrative,
             reporting_events=reporting_events,
         )
 
-        new_latest = {**state["latest_artifacts"], output_type: artifact_yaml}
+        new_latest = {**state["latest_artifacts"], resolved_output_type: artifact_yaml}
         new_steps = [*state["steps_completed"], step_result]
 
         # Rework counter: per-gate (increments on fail/warning, resets on pass)

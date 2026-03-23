@@ -69,6 +69,18 @@ def extract_code_files(impl_artifact_yaml: str) -> list[dict[str, str]]:
     return result
 
 
+def _strip_workspace_prefix(rel_path: str) -> str:
+    """Strip leading 'workspace/' or 'workspace/{ProjectName}/' prefix.
+
+    LLMs sometimes include 'workspace/' in code_files paths even though
+    the write target is already a workspace directory, causing nesting.
+    """
+    parts = rel_path.replace("\\", "/").split("/")
+    if parts and parts[0].lower() == "workspace":
+        return "/".join(parts[1:])
+    return rel_path
+
+
 def write_code_files(
     impl_artifact_yaml: str,
     workspace_dir: str | Path,
@@ -93,6 +105,10 @@ def write_code_files(
     for entry in code_files:
         rel_path = entry["path"]
         content = entry["content"]
+
+        # Strip leading "workspace/" prefix that LLMs sometimes include
+        # to prevent workspace/workspace/ nesting
+        rel_path = _strip_workspace_prefix(rel_path)
 
         # Security: prevent path traversal
         try:
