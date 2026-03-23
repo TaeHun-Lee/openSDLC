@@ -6,11 +6,12 @@ Includes automatic retry with backoff for rate-limit (429) errors.
 Detects daily quota exhaustion and provides clear error messages.
 """
 
+import hashlib
 import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from config import (
@@ -34,6 +35,8 @@ class LLMResponse:
     provider: Provider
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
 
 
 def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
@@ -43,16 +46,26 @@ def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int)
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system,
+        system=[{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[{"role": "user", "content": user_message}],
     )
+    usage = response.usage
     return LLMResponse(
         text=response.content[0].text,
         model=model,
         provider="anthropic",
-        input_tokens=getattr(response.usage, "input_tokens", None),
-        output_tokens=getattr(response.usage, "output_tokens", None),
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", None),
     )
+
+
+_google_cache_store: dict[str, str] = {}  # hash(system) → cache.name
 
 
 def _call_google(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
@@ -60,6 +73,69 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
     from google.genai import types
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
+
+    cache_key = hashlib.sha256(f"{model}:{system}".encode()).hexdigest()[:16]
+    cached_content_name = _google_cache_store.get(cache_key)
+    cache_read = 0
+    cache_creation = 0
+
+    if cached_content_name:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    cached_content=cached_content_name,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            usage = response.usage_metadata
+            cache_read = getattr(usage, "cached_content_token_count", 0) or 0
+            return LLMResponse(
+                text=response.text,
+                model=model,
+                provider="google",
+                input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+                output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+                cache_read_tokens=cache_read or None,
+            )
+        except Exception:
+            logger.debug("Google cached content expired or invalid, recreating")
+            _google_cache_store.pop(cache_key, None)
+
+    # Try to create a cache for the system prompt
+    try:
+        cache = client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                system_instruction=system,
+            ),
+        )
+        _google_cache_store[cache_key] = cache.name
+        logger.debug("Google cache created: %s", cache.name)
+
+        response = client.models.generate_content(
+            model=model,
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                cached_content=cache.name,
+                max_output_tokens=max_tokens,
+            ),
+        )
+        usage = response.usage_metadata
+        cache_creation = getattr(usage, "cached_content_token_count", 0) or 0
+        return LLMResponse(
+            text=response.text,
+            model=model,
+            provider="google",
+            input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+            output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+            cache_creation_tokens=cache_creation or None,
+        )
+    except Exception as cache_exc:
+        logger.debug("Google caching unavailable (%s), falling back to direct call", cache_exc)
+
+    # Fallback: direct call without caching
     response = client.models.generate_content(
         model=model,
         contents=user_message,
@@ -253,11 +329,17 @@ def call_llm(
         assert response is not None
         last_response = response
 
+        cache_info = ""
+        if response.cache_read_tokens:
+            cache_info = f", cache_read={response.cache_read_tokens}"
+        elif response.cache_creation_tokens:
+            cache_info = f", cache_created={response.cache_creation_tokens}"
         logger.info(
-            "[LLM] response — %d chars (in=%s, out=%s tokens)",
+            "[LLM] response — %d chars (in=%s, out=%s tokens%s)",
             len(response.text),
             response.input_tokens,
             response.output_tokens,
+            cache_info,
         )
 
         # Run quality checks

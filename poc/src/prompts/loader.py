@@ -1,9 +1,11 @@
-"""Load prompt and template files from the open-sdlc-engine directory."""
+"""Load prompt and template files from the core/open-sdlc-engine directory."""
 
 from pathlib import Path
 from functools import lru_cache
 
 from config import PROMPTS_DIR, TEMPLATES_DIR, CONSTITUTION_DIR, ENGINE_DIR
+
+MANDATES_DIR = Path(__file__).parent / "mandates"
 
 
 @lru_cache(maxsize=None)
@@ -31,15 +33,37 @@ def load_template(artifact_name: str) -> str:
 
 
 @lru_cache(maxsize=None)
-def load_constitution_excerpt() -> str:
-    """Load core governance principles from constitution files."""
+def load_constitution_sections(filenames: tuple[str, ...] = ()) -> str:
+    """Load selected constitution sections.
+
+    Args:
+        filenames: Tuple of constitution filenames to load.
+                   Empty tuple loads all files (backward compat).
+    """
     excerpts: list[str] = []
-    for fname in sorted(CONSTITUTION_DIR.glob("*.md")):
-        text = fname.read_text(encoding="utf-8")
-        # Take first 60 lines of each constitution file as key principles
-        lines = text.splitlines()[:60]
-        excerpts.append(f"## {fname.name}\n" + "\n".join(lines))
+    if filenames:
+        for fname in filenames:
+            path = CONSTITUTION_DIR / fname
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            lines = text.splitlines()[:60]
+            excerpts.append(f"## {fname}\n" + "\n".join(lines))
+    else:
+        for path in sorted(CONSTITUTION_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            lines = text.splitlines()[:60]
+            excerpts.append(f"## {path.name}\n" + "\n".join(lines))
     return "\n\n---\n\n".join(excerpts)
+
+
+@lru_cache(maxsize=None)
+def load_mandate(filename: str) -> str:
+    """Load a mandate file from prompts/mandates/."""
+    path = MANDATES_DIR / filename
+    if not path.exists():
+        raise FileNotFoundError(f"Mandate not found: {path}")
+    return path.read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=None)

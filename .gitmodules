@@ -1,0 +1,3 @@
+[submodule "core"]
+	path = core
+	url = https://github.com/scm-git-einz/open-sdlc-v1.git

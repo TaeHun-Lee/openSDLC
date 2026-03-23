@@ -11,7 +11,7 @@ OpenSDLC는 소프트웨어 개발 생명주기(SDLC)의 각 단계를 담당하
 구조화된 아티팩트(YAML)를 통해 유기적으로 협업하는 AI Software Factory 플랫폼이다.
 
 ### 현재 상태
-- `open-sdlc-constitution/`, `open-sdlc-engine/`, `open-sdlc-docs/`에 **방법론 명세**가 완성되어 있음
+- `core/open-sdlc-constitution/`, `core/open-sdlc-engine/`, `core/open-sdlc-docs/`에 **방법론 명세**가 완성되어 있음 (git submodule로 관리)
 - 6종의 아티팩트 스키마(UC, TEST-DESIGN, IMPL, TEST-EXECUTION, FB, VAL)가 정의됨
 - 12단계 파이프라인에 5개 Validation 게이트가 설계됨
 - **아직 실행 런타임(코드)이 없음** — 현재는 단일 LLM 대화에서 1인다역으로 테스트 중
@@ -66,9 +66,9 @@ Agent 간에 전달되는 것은 오직 **YAML 아티팩트 문자열**뿐이다
 
 ### ReqAgent 호출 구조
 ```
-system_prompt: open-sdlc-engine/prompts/agent/req-agent.md 내용
-               + open-sdlc-constitution/ 핵심 원칙 발췌
-               + open-sdlc-engine/templates/UseCaseModelArtifact 템플릿
+system_prompt: core/open-sdlc-engine/prompts/agent/req-agent.md 내용
+               + core/open-sdlc-constitution/ 핵심 원칙 발췌
+               + core/open-sdlc-engine/templates/UseCaseModelArtifact 템플릿
 user_message:  사용자의 User Story (최초)
                또는 ValidatorAgent의 fail 사유 + 이전 UC artifact (재작업 시)
 output:        UseCaseModelArtifact (YAML)
@@ -76,10 +76,10 @@ output:        UseCaseModelArtifact (YAML)
 
 ### ValidatorAgent 호출 구조
 ```
-system_prompt: open-sdlc-engine/prompts/agent/validator-agent.md 내용
-               + open-sdlc-constitution/ 검증 기준
-               + open-sdlc-engine/templates/ValidationReportArtifact 템플릿
-               + open-sdlc-engine/templates/UseCaseModelArtifact 템플릿 (스키마 참조용)
+system_prompt: core/open-sdlc-engine/prompts/agent/validator-agent.md 내용
+               + core/open-sdlc-constitution/ 검증 기준
+               + core/open-sdlc-engine/templates/ValidationReportArtifact 템플릿
+               + core/open-sdlc-engine/templates/UseCaseModelArtifact 템플릿 (스키마 참조용)
 user_message:  ReqAgent가 생성한 UC artifact(YAML) ← 이것만!
                (ReqAgent의 system prompt, 사고 과정, 중간 응답은 절대 포함하지 않음)
 output:        ValidationReportArtifact (YAML) with validation_result: pass|warning|fail
@@ -87,7 +87,7 @@ output:        ValidationReportArtifact (YAML) with validation_result: pass|warn
 
 ### CodeAgent 호출 구조 (ValidatorAgent pass 이후)
 ```
-system_prompt: open-sdlc-engine/prompts/agent/code-agent.md 내용
+system_prompt: core/open-sdlc-engine/prompts/agent/code-agent.md 내용
                + 기술 스택 제약사항
 user_message:  승인된 UC artifact(YAML)
 output:        ImplementationArtifact (YAML) + 실제 코드 파일
@@ -180,13 +180,14 @@ v1의 6가지 감사 기준을 항목별로 점검하고 결과를 채우게 한
 ```
 open-sdlc-v1/
 ├── CLAUDE.md                        ← 이 파일 (Claude CLI 컨텍스트)
-├── AGENTS.md                        ← 기존 파일 (OpenSDLC Agent 규칙)
-├── open-sdlc-constitution/          ← 기존: 거버넌스 규칙
-├── open-sdlc-engine/                ← 기존: 방법론 명세
-│   ├── core-concepts/
-│   ├── prompts/
-│   └── templates/
-├── open-sdlc-docs/                  ← 기존: 참고 문서
+├── core/                            ← git submodule (open-sdlc-v1 레포)
+│   ├── AGENTS.md                    ← OpenSDLC Agent 규칙
+│   ├── open-sdlc-constitution/      ← 거버넌스 규칙
+│   ├── open-sdlc-engine/            ← 방법론 명세
+│   │   ├── core-concepts/
+│   │   ├── prompts/
+│   │   └── templates/
+│   └── open-sdlc-docs/              ← 참고 문서
 │
 ├── poc/                             ← 신규: PoC 구현 코드
 │   ├── pyproject.toml               # 의존성 관리
@@ -221,9 +222,9 @@ open-sdlc-v1/
 - config.py에 Anthropic API 키 로딩 및 모델 설정
 
 ### Step 2: 프롬프트 로더 구현
-- `open-sdlc-engine/prompts/agent/` 에서 Agent별 시스템 프롬프트 읽기
-- `open-sdlc-engine/templates/` 에서 아티팩트 템플릿 읽기
-- `open-sdlc-constitution/` 에서 핵심 원칙 발췌 읽기
+- `core/open-sdlc-engine/prompts/agent/` 에서 Agent별 시스템 프롬프트 읽기
+- `core/open-sdlc-engine/templates/` 에서 아티팩트 템플릿 읽기
+- `core/open-sdlc-constitution/` 에서 핵심 원칙 발췌 읽기
 - 이들을 조합하여 각 Agent의 최종 system prompt를 빌드하는 builder
 
 ### Step 3: ReqAgent 노드 구현
@@ -252,13 +253,13 @@ open-sdlc-v1/
 
 | 용도 | 경로 |
 |------|------|
-| Agent 역할 정의 | `open-sdlc-engine/core-concepts/agent-definitions.md` |
-| 파이프라인 워크플로우 | `open-sdlc-engine/core-concepts/workflow.md` |
-| 핵심 설계 원칙 | `open-sdlc-engine/core-concepts/core-concept.md` |
-| Agent별 프롬프트 | `open-sdlc-engine/prompts/agent/` |
-| 시스템 프롬프트 | `open-sdlc-engine/prompts/system/` |
-| 아티팩트 템플릿 | `open-sdlc-engine/templates/` |
-| 헌법 (최상위 규범) | `open-sdlc-constitution/` |
+| Agent 역할 정의 | `core/open-sdlc-engine/core-concepts/agent-definitions.md` |
+| 파이프라인 워크플로우 | `core/open-sdlc-engine/core-concepts/workflow.md` |
+| 핵심 설계 원칙 | `core/open-sdlc-engine/core-concepts/core-concept.md` |
+| Agent별 프롬프트 | `core/open-sdlc-engine/prompts/agent/` |
+| 시스템 프롬프트 | `core/open-sdlc-engine/prompts/system/` |
+| 아티팩트 템플릿 | `core/open-sdlc-engine/templates/` |
+| 헌법 (최상위 규범) | `core/open-sdlc-constitution/` |
 
 **주의**: 이 파일들의 내용을 임의로 수정하지 않는다.
 PoC 코드는 이 파일들을 "읽기 전용 입력"으로 사용하여 프롬프트를 조립한다.

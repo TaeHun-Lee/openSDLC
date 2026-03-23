@@ -9,17 +9,20 @@ from pipeline.state import PipelineState
 logger = logging.getLogger(__name__)
 
 
-def make_validator_router(step_num: int, max_iterations: int):
+def make_validator_router(step_num: int):
     """Create a routing function for a ValidatorAgent step.
 
     Returns a closure that reads the latest validation result from state.
     Routes: "pass" | "rework" | "max_retries"
+
+    Uses rework_count (per-gate) to decide rework vs max_retries.
     """
 
     def route_after_validation(state: PipelineState) -> str:
         latest_step = state["steps_completed"][-1] if state["steps_completed"] else None
         result = latest_step["validation_result"] if latest_step else "fail"
-        count = state["iteration_count"]
+        rework_count = state["rework_count"]
+        max_reworks = state["max_reworks_per_gate"]
 
         if result == "pass":
             logger.info(
@@ -27,21 +30,21 @@ def make_validator_router(step_num: int, max_iterations: int):
             )
             return "pass"
 
-        if count >= max_iterations:
+        if rework_count >= max_reworks:
             logger.warning(
-                "[Router] step %d: validation=%s, max_iterations=%d reached → END",
+                "[Router] step %d: validation=%s, max_reworks_per_gate=%d reached → END",
                 step_num,
                 result,
-                max_iterations,
+                max_reworks,
             )
             return "max_retries"
 
         logger.info(
-            "[Router] step %d: validation=%s, iteration=%d/%d → rework",
+            "[Router] step %d: validation=%s, rework=%d/%d → rework",
             step_num,
             result,
-            count,
-            max_iterations,
+            rework_count,
+            max_reworks,
         )
         return "rework"
 

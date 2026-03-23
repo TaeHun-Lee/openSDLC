@@ -7,13 +7,12 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def extract_yaml_from_response(response_text: str) -> str:
-    """
-    Extract raw YAML string from LLM response.
+def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:
+    """Split LLM response into (narrative_text, yaml_artifact).
 
-    Agents should output bare YAML (no markdown fences), but we handle
-    the common case where the model wraps it in ```yaml ... ``` anyway.
-    Also handles multi-document YAML (strips trailing ``---`` separators).
+    The narrative is the agent's progress report / handoff announcement.
+    The YAML is the structured artifact.
+    Returns (narrative, yaml) where narrative may be empty.
     """
     # Try markdown code fence first
     fence_match = re.search(
@@ -22,25 +21,44 @@ def extract_yaml_from_response(response_text: str) -> str:
         re.DOTALL,
     )
     if fence_match:
-        raw = fence_match.group(1).strip()
-    else:
-        # Heuristic: look for a line starting with 'artifact_id:' and take from there
-        lines = response_text.splitlines()
-        start_idx = None
-        for i, line in enumerate(lines):
-            if line.strip().startswith("artifact_id:"):
-                start_idx = i
-                break
+        yaml_part = fence_match.group(1).strip()
+        # Everything before the fence is narrative
+        narrative = response_text[:fence_match.start()].strip()
+        # Everything after the fence (if any) appended to narrative
+        after = response_text[fence_match.end():].strip()
+        if after:
+            narrative = f"{narrative}\n{after}".strip() if narrative else after
+        yaml_part = _strip_extra_documents(yaml_part)
+        return narrative, yaml_part
 
-        if start_idx is not None:
-            raw = "\n".join(lines[start_idx:]).strip()
-        else:
-            # Fallback: return full text and let yaml.safe_load decide
-            raw = response_text.strip()
+    # Heuristic: look for a line starting with 'artifact_id:' and split there
+    lines = response_text.splitlines()
+    start_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("artifact_id:"):
+            start_idx = i
+            break
 
-    # Strip trailing YAML document separators to avoid multi-document errors
-    raw = _strip_extra_documents(raw)
-    return raw
+    if start_idx is not None:
+        narrative = "\n".join(lines[:start_idx]).strip()
+        yaml_part = "\n".join(lines[start_idx:]).strip()
+        yaml_part = _strip_extra_documents(yaml_part)
+        return narrative, yaml_part
+
+    # Fallback: no narrative found, entire text is yaml
+    return "", _strip_extra_documents(response_text.strip())
+
+
+def extract_yaml_from_response(response_text: str) -> str:
+    """
+    Extract raw YAML string from LLM response.
+
+    Agents should output bare YAML (no markdown fences), but we handle
+    the common case where the model wraps it in ```yaml ... ``` anyway.
+    Also handles multi-document YAML (strips trailing ``---`` separators).
+    """
+    _, yaml_part = split_narrative_and_yaml(response_text)
+    return yaml_part
 
 
 def _strip_extra_documents(yaml_text: str) -> str:

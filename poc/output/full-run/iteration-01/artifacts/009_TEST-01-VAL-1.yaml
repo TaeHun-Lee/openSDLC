@@ -1,0 +1,85 @@
+artifact_id: "TEST-01-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-10-27T10:05:00Z"
+source_artifact_ids:
+  - "TEST-01"
+status: "feedback-required"
+summary: "TestReportArtifact 'TEST-01'의 'test_results' 내 'related_acceptance_criteria' 필드가 스키마에 정의된 단일 문자열 형식을 따르지 않아 유효성 검증에 실패했습니다. 재작업이 필요합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TEST-01"
+validated_artifact_type: "TestReportArtifact"
+validated_stage: "TEST-EXECUTION"
+validation_attempt: 1
+validation_result: "fail"
+
+checks:
+  - check_name: "schema"
+    result: "fail"
+    evidence: "The 'related_acceptance_criteria' field in 'test_results' is a list of strings, but the schema expects a single string."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "source_artifact_ids (UC-01, TD-01, IMPL-01) are correctly linked. Test cases (TC-01-01, TC-01-02) correctly reference related use case (UC-01-01) and test scenarios (TS-01-01, TS-01-02)."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent operated within its defined role, focusing on test reporting without defining new requirements or implementing code."
+  - check_name: "test_design_traceability"
+    result: "pass"
+    evidence: "Test report traces back to UC-01 and TD-01 via source_artifact_ids and test_scope. Individual test results link to related test scenarios."
+  - check_name: "scenario_execution_completeness"
+    result: "pass"
+    evidence: "All implicitly expected scenarios (TS-01-01, TS-01-02) appear to have corresponding test cases in the report (TC-01-01, TC-01-02)."
+  - check_name: "evidence_quality"
+    result: "pass"
+    evidence: "Evidence provided for each test case is specific, includes file paths and line numbers (e.g., 'workspace/lotto-app/index.html` 라인 16', 'workspace/lotto-app/script.js` 라인 13-17'), and clearly supports the claimed test result."
+  - check_name: "evidence_type_consistency"
+    result: "pass"
+    evidence: "The 'validation_basis: code_review_and_simulated_execution' is consistent with the textual evidence provided, which combines code analysis with simulated runtime observations."
+  - check_name: "defect_quality"
+    result: "pass"
+    evidence: "The 'defects' list is empty, which is consistent with the overall 'pass' result for all test cases. If defects were present, their structure would be evaluated."
+  - check_name: "score_consistency"
+    result: "pass"
+    evidence: "requirement_coverage (total: 5, passed: 5, failed: 0, satisfaction_score: 100) and overall_result ('pass') are arithmetically consistent."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC: []
+  IMPL: []
+  TEST-DESIGN: []
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB: []
+
+violations:
+  - rule: "Schema Non-Compliance: 'related_acceptance_criteria' format"
+    severity: "high"
+    description: "The field 'related_acceptance_criteria' in 'test_results' for both test cases (TC-01-01, TC-01-02) is provided as a list of strings. The TestReportArtifact template schema defines this field as a single string."
+    recommended_action: "Modify the 'related_acceptance_criteria' field for each test case to be a single concatenated string that clearly describes the covered acceptance criteria, or adjust the schema if a list is truly intended and approved by PMAgent for future iterations. For now, strict template compliance is required."
+
+warnings:
+  - "The 'status' field of the TestReportArtifact is set to 'approved'. Conventionally, TestReportArtifacts produced by TestAgent should have a status of 'actionable' or 'draft' before formal approval by PMAgent, following validation. This is a minor consistency note, not a blocker."
+
+next_action:
+  action: "rework"
+  target_agent: "TestAgent"
+  reason: "The TestReportArtifact requires rework due to a schema non-compliance in the 'related_acceptance_criteria' field, which is a blocking issue for downstream progression."
+
+blocking_reason: "The 'related_acceptance_criteria' field in 'test_results' does not conform to the schema (expected single string, received list of strings)."
+rework_target_artifact_id: "TEST-01"

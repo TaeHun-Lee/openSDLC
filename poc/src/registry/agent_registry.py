@@ -11,7 +11,10 @@ from registry.models import AgentConfig, AgentPersona
 logger = logging.getLogger(__name__)
 
 _AGENT_CONFIGS_DIR = (
-    Path(__file__).parent.parent.parent.parent / "open-sdlc-engine" / "agent-configs"
+    Path(__file__).parent.parent.parent.parent / "core" / "open-sdlc-engine" / "agent-configs"
+)
+_OVERRIDE_DIR = (
+    Path(__file__).parent.parent.parent.parent / "poc" / "agent-config-overrides"
 )
 
 
@@ -40,6 +43,20 @@ def load_all_agents() -> dict[str, AgentConfig]:
             raw.pop("interaction_policy", None)
 
             config = AgentConfig(persona=persona, **raw)
+
+            # Merge PoC overlay if present
+            override_file = _OVERRIDE_DIR / f"{config.agent_id}.override.yaml"
+            if override_file.is_file():
+                try:
+                    overlay = yaml.safe_load(override_file.read_text(encoding="utf-8"))
+                    if isinstance(overlay, dict):
+                        for key, val in overlay.items():
+                            if hasattr(config, key):
+                                setattr(config, key, val)
+                        logger.debug("Applied overlay for %s", config.agent_id)
+                except Exception as ov_exc:
+                    logger.warning("Failed to load overlay %s: %s", override_file.name, ov_exc)
+
             agents[config.agent_id] = config
             logger.debug("Loaded agent config: %s", config.agent_id)
 

@@ -33,20 +33,15 @@ def _save_artifacts(final_state: PipelineState, out_dir: Path) -> None:
     prefixed with a sequence number to preserve execution order within
     the iteration.
     """
-    from collections import defaultdict
-    from artifacts.parser import extract_artifact_id, extract_iteration
+    from artifacts.parser import extract_artifact_id
 
     out_dir.mkdir(parents=True, exist_ok=True)
     steps = final_state.get("steps_completed", [])
 
-    # Group steps by iteration
-    iter_groups: dict[int, list[tuple[int, dict]]] = defaultdict(list)
-    for seq, step_result in enumerate(steps, start=1):
-        yaml_str = step_result.get("artifact_yaml", "")
-        if not yaml_str:
-            continue
-        iteration = extract_iteration(yaml_str)
-        iter_groups[iteration].append((seq, step_result))
+    # Use pipeline state's iteration_count (managed by code, not LLM)
+    iteration = final_state.get("iteration_count", 1)
+    iter_groups = {iteration: [(seq, sr) for seq, sr in enumerate(steps, start=1)
+                               if sr.get("artifact_yaml")]}
 
     # Save each iteration into its own subdirectory
     for iteration in sorted(iter_groups):

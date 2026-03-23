@@ -84,7 +84,7 @@ Step 1 (ReqAgent):
       └─ generic_agent.py:122-194  create_agent_node() 팩토리
          ├─ agent_registry.py:53   get_agent("ReqAgent") → AgentConfig 로드
          │   └─ agent_registry.py:19  load_all_agents() (최초 1회)
-         │       └─ open-sdlc-engine/agent-configs/ReqAgent.config.yaml 파싱
+         │       └─ core/open-sdlc-engine/agent-configs/ReqAgent.config.yaml 파싱
          │       └─ (나머지 Agent config도 전부 로드, lru_cache로 캐싱)
          ├─ builder.py:95          build_system_prompt(agent_config, step)
          │   └─ loader.py:19      load_common_prompt() → AgentCommon.txt 읽기
@@ -313,7 +313,7 @@ run_poc.py:main()
 | `src/registry/agent_registry.py` | `agent-configs/*.config.yaml`에서 Agent 설정 로드 |
 | `src/registry/models.py` | `AgentConfig`, `StepDefinition`, `PipelineDefinition` Pydantic 모델 |
 | `src/prompts/builder.py` | Agent별 system prompt 조립 (공통규칙 + Agent프롬프트 + 템플릿 + 헌법) |
-| `src/prompts/loader.py` | `open-sdlc-engine/` 디렉토리에서 프롬프트/템플릿/헌법 파일 읽기 |
+| `src/prompts/loader.py` | `core/open-sdlc-engine/` 디렉토리에서 프롬프트/템플릿/헌법 파일 읽기 |
 | `src/llm_client.py` | 멀티 프로바이더 LLM 호출 (Anthropic/Google/OpenAI), 재시도/품질검증 |
 | `src/artifacts/parser.py` | LLM 응답에서 YAML 추출, artifact_id/iteration 파싱, validation_result 추출 |
 | `src/artifacts/code_extractor.py` | ImplementationArtifact에서 code_files 추출 → 실행 가능 파일 생성 |

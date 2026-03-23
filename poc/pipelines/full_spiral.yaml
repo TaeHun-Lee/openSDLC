@@ -1,48 +1,72 @@
 name: full-spiral
-description: "Full spiral SDLC pipeline with all validation gates"
+description: "Full 12-step spiral SDLC pipeline per core-concept.md Section 4"
 max_iterations: 3
 steps:
-  # Phase 1: Requirements
+  # Step 1: PMAgent — 사용자 요청 접수 및 전체 워크플로우 통제
   - step: 1
+    agent: PMAgent
+    model: gemini-2.5-pro
+
+  # Step 2: ReqAgent — 요구사항 명세화 (UseCaseModelArtifact)
+  - step: 2
     agent: ReqAgent
     model: gemini-2.5-pro
-  - step: 2
+
+  # Step 3: ValidatorAgent (UC) — 요구사항 아티팩트 검증
+  - step: 3
     agent: ValidatorAgent
     model: gemini-2.5-pro
     on_fail: ReqAgent
 
-  # Phase 2: Test Design (before implementation)
-  - step: 3
+  # Step 4: TestAgent (Design Mode) — 테스트 시나리오 설계 (TestDesignArtifact)
+  - step: 4
     agent: TestAgent
     model: gemini-2.5-flash
     mode: design
-  - step: 4
+
+  # Step 5: ValidatorAgent (TEST-DESIGN) — 테스트 설계 검증
+  - step: 5
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: TestAgent
 
-  # Phase 3: Implementation
-  - step: 5
+  # Step 6: CodeAgent — 기능 구현 및 코드 생성 (ImplementationArtifact)
+  - step: 6
     agent: CodeAgent
     model: gemini-2.5-pro
     max_tokens: 16384
     min_response_chars: 2000
-  - step: 6
+
+  # Step 7: ValidatorAgent (IMPL) — 구현 결과 검증
+  - step: 7
     agent: ValidatorAgent
     model: gemini-2.5-pro
     on_fail: CodeAgent
 
-  # Phase 4: Test Execution (after implementation)
-  - step: 7
+  # Step 8: TestAgent (Execution Mode) — 테스트 실행/검증 (TestReportArtifact)
+  - step: 8
     agent: TestAgent
     model: gemini-2.5-flash
     mode: execution
-  - step: 8
+
+  # Step 9: ValidatorAgent (TEST-EXECUTION) — 테스트 실행 결과 검증
+  - step: 9
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: TestAgent
 
-  # Phase 5: Feedback
-  - step: 9
+  # Step 10: CoordAgent — 다음 이터레이션 피드백 (FeedbackArtifact)
+  - step: 10
     agent: CoordAgent
+    model: gemini-2.5-pro
+
+  # Step 11: ValidatorAgent (FB) — 피드백 실행 가능성/일관성 검증
+  - step: 11
+    agent: ValidatorAgent
+    model: gemini-2.5-pro
+    on_fail: CoordAgent
+
+  # Step 12: PMAgent — iteration_assessment 작성 및 사용자 최종 피드백 확인
+  - step: 12
+    agent: PMAgent
     model: gemini-2.5-pro

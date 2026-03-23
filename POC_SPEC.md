@@ -40,13 +40,13 @@ dependencies = [
 v1 기존 파일에서 텍스트를 읽어오는 유틸리티.
 ```python
 def load_agent_prompt(agent_name: str) -> str:
-    """open-sdlc-engine/prompts/agent/{agent_name}.md 파일 내용 반환"""
+    """core/open-sdlc-engine/prompts/agent/{agent_name}.md 파일 내용 반환"""
 
 def load_template(artifact_type: str) -> str:
-    """open-sdlc-engine/templates/{artifact_type} 템플릿 내용 반환"""
+    """core/open-sdlc-engine/templates/{artifact_type} 템플릿 내용 반환"""
 
 def load_constitution_excerpt() -> str:
-    """open-sdlc-constitution/에서 핵심 원칙만 발췌하여 반환"""
+    """core/open-sdlc-constitution/에서 핵심 원칙만 발췌하여 반환"""
 ```
 
 ### 3. `src/prompts/builder.py`

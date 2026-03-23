@@ -1,0 +1,125 @@
+artifact_id: "TEST-01-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-11-21T15:00:00Z"
+source_artifact_ids:
+  - "TEST-01"
+status: "approved"
+summary: "제출된 TestReportArtifact는 스키마, 추적성, 역할 경계, 증거 품질, 점수 일관성 등 모든 검증 기준을 충족하여 승인되었습니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TEST-01"
+validated_artifact_type: "TestReportArtifact"
+validated_stage: "TEST-EXECUTION"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "TestReportArtifact 'TEST-01'은 TestReportArtifact.yaml 스키마에 정의된 모든 필수 필드와 구조를 준수함."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "source_artifact_ids(UC-01, TD-01, IMPL-01)가 올바르게 연결되었으며, test_scope 및 각 test_case에서 관련 Use Case ID (UC-01-01)와 Test Scenario ID (TS-01-01~TS-01-05)가 명확하게 추적됨."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent는 테스트 실행 결과를 보고하는 역할에 충실하며, 요구사항을 재정의하거나 코드를 구현하는 등 다른 에이전트의 역할 경계를 침범하지 않음."
+  - check_name: "test_design_traceability"
+    result: "pass"
+    evidence: "모든 test_case는 related_test_scenario_id를 통해 TestDesignArtifact (TD-01)의 시나리오와 명확하게 연결됨."
+  - check_name: "scenario_execution_completeness"
+    result: "pass"
+    evidence: "5개의 테스트 시나리오(TS-01-01 ~ TS-01-05)에 대한 실행 결과가 모두 보고되었으며, summary 및 key_findings에서 '모든 테스트 시나리오'가 'Pass'되었음을 명시하여 완전성을 주장함."
+  - check_name: "evidence_quality"
+    result: "pass"
+    evidence: "각 test_case의 evidence는 UI 관찰, 스크린 관찰, 생성된 숫자 예시, 그리고 관련 JavaScript 함수 로직(예: `Set` 객체, `sort((a,b)=>a-b)`, `Math.random()`) 참조를 포함하여 구체적이고 재현 가능하며 높은 품질을 가짐."
+  - check_name: "evidence_type_consistency"
+    result: "pass"
+    evidence: "모든 test_case의 validation_basis는 'execution'으로 명시되었으며, 제출된 evidence 또한 실제 실행 환경에서의 관찰 결과와 코드 로직 확인으로 일관성 있게 구성됨."
+  - check_name: "defect_quality"
+    result: "pass"
+    evidence: "defects 리스트가 비어 있으며, 이는 모든 테스트 케이스가 'pass'된 결과와 일관성을 이룸."
+  - check_name: "score_consistency"
+    result: "pass"
+    evidence: "requirement_coverage의 total_acceptance_criteria(5), passed(5), failed(0)는 test_results의 결과와 정확히 일치하며, satisfaction_score 100점 및 overall_result 'pass'와도 일관성을 이룸."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "CoordAgent"
+  reason: "TestReportArtifact가 모든 유효성 검사를 통과하여 다음 단계인 CoordAgent로 진행합니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

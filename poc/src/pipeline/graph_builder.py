@@ -71,10 +71,7 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
                 )
 
             pass_target = next_node if next_node else END
-            routing_fn = make_validator_router(
-                step_num=step_def.step,
-                max_iterations=pipeline_def.max_iterations,
-            )
+            routing_fn = make_validator_router(step_num=step_def.step)
 
             graph.add_conditional_edges(
                 current_node,
@@ -109,15 +106,19 @@ def run_pipeline(
         "steps_completed": [],
         "latest_artifacts": {},
         "current_step_index": 0,
-        "iteration_count": 0,
+        "iteration_count": 1,                                  # spiral iteration (starts at 1)
         "max_iterations": pipeline_def.max_iterations,
+        "rework_count": 0,                                     # per-gate rework counter
+        "max_reworks_per_gate": pipeline_def.max_reworks_per_gate,
         "pipeline_status": "running",
     }
 
     print("\n" + "=" * 60)
     print(f"[Pipeline] '{pipeline_def.name}' 시작")
     print(f"[Pipeline] User Story: {user_story[:100]}...")
-    print(f"[Pipeline] Steps: {len(pipeline_def.steps)}, Max iterations: {pipeline_def.max_iterations}")
+    print(f"[Pipeline] Steps: {len(pipeline_def.steps)}, "
+          f"Max spiral iterations: {pipeline_def.max_iterations}, "
+          f"Max reworks/gate: {pipeline_def.max_reworks_per_gate}")
     agents_summary = " → ".join(
         f"{s.agent}{'(' + s.mode + ')' if s.mode else ''}" for s in pipeline_def.steps
     )
@@ -125,7 +126,7 @@ def run_pipeline(
     print("=" * 60)
 
     compiled = create_pipeline(pipeline_def)
- 
+
     try:
         final_state: PipelineState = compiled.invoke(initial_state)  # type: ignore[assignment]
     except QuotaExhaustedError as exc:
@@ -133,7 +134,6 @@ def run_pipeline(
         print(f"[Pipeline] QUOTA EXHAUSTED — 파이프라인 중단")
         print(f"[Pipeline] {exc}")
         print("=" * 60)
-        # Return partial state so artifacts generated so far can be saved
         initial_state["pipeline_status"] = "quota_exhausted"
         return initial_state
     except Exception as exc:
@@ -142,24 +142,25 @@ def run_pipeline(
         print("=" * 60)
         initial_state["pipeline_status"] = f"error: {type(exc).__name__}"
         return initial_state
-    
-    # Determine final status
-    last_validation = None
-    for sr in reversed(final_state["steps_completed"]):
-        if sr["validation_result"] is not None:
-            last_validation = sr["validation_result"]
-            break
 
-    if final_state["iteration_count"] >= pipeline_def.max_iterations:
-        final_state["pipeline_status"] = "max_retries_exceeded"
+    # Determine final status
+    if final_state["rework_count"] >= pipeline_def.max_reworks_per_gate:
+        final_state["pipeline_status"] = "max_reworks_exceeded"
     else:
         final_state["pipeline_status"] = "completed"
+
+    # Count total reworks across all gates
+    total_reworks = sum(
+        1 for sr in final_state["steps_completed"]
+        if sr["validation_result"] in ("fail", "warning")
+    )
 
     print("\n" + "=" * 60)
     print(f"[Pipeline] '{pipeline_def.name}' 완료")
     print(f"[Pipeline] Status: {final_state['pipeline_status']}")
+    print(f"[Pipeline] Spiral iteration: {final_state['iteration_count']}")
     print(f"[Pipeline] Steps executed: {len(final_state['steps_completed'])}")
-    print(f"[Pipeline] Iterations used: {final_state['iteration_count']}")
+    print(f"[Pipeline] Total reworks: {total_reworks}")
     if final_state["latest_artifacts"]:
         print(f"[Pipeline] Artifacts: {list(final_state['latest_artifacts'].keys())}")
     print("=" * 60)

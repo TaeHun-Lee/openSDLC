@@ -1,0 +1,92 @@
+artifact_id: "TD-01"
+artifact_type: "TestDesignArtifact"
+iteration: 1
+created_by: "TestAgent"
+created_at: "2023-10-27T10:00:00Z"
+source_artifact_ids:
+  - "UC-01"
+status: "draft"
+summary: "로또 번호 생성 및 표시 기능에 대한 테스트 설계 문서"
+instructions_for_next_agent: |
+  TestDesignArtifact를 검증하라.
+  coverage completeness, scenario quality, evidence type 정의를 확인하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+test_design_scope:
+  use_case_ids:
+    - "UC-01-01"
+
+coverage_plan:
+  acceptance_criteria:
+    - item: "'번호 생성' 버튼이 화면에 표시되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "버튼 클릭 시, 1부터 45 사이의 숫자 6개가 화면에 표시되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "표시된 6개의 숫자는 서로 중복되지 않아야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "표시된 6개의 숫자는 오름차순으로 정렬되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "버튼을 다시 클릭할 때마다 새로운 번호 조합이 생성되어 표시되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+  main_flow_steps:
+    - item: "사용자가 '번호 생성' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "시스템은 1부터 45 사이의 숫자 중 중복되지 않는 6개의 숫자를 무작위로 선택한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "시스템은 선택된 6개의 숫자를 오름차순으로 정렬한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "시스템은 정렬된 번호를 화면의 지정된 영역에 표시한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+  preconditions:
+    - item: "사용자가 로또 앱 페이지에 접속해 있다."
+      covered_by_scenarios:
+        - "TS-01-01"
+  triggers:
+    - item: "사용자가 '번호 생성' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+  observable_outcomes:
+    - item: "화면에 6개의 로또 번호가 표시된다."
+      covered_by_scenarios:
+        - "TS-01-01"
+
+test_scenarios:
+  - scenario_id: "TS-01-01"
+    related_use_case_id: "UC-01-01"
+    purpose: "초기 화면에 '번호 생성' 버튼이 존재하고, 첫 클릭 시 1~45 범위의 중복 없는 6개 숫자가 오름차순으로 생성되어 표시되는지 검증"
+    setup: "로또 번호 생성 앱 페이지에 접속한다."
+    action: "화면에 보이는 '번호 생성' 버튼을 클릭한다."
+    expected_result: |
+      1. 화면에 '번호 생성' 버튼이 표시되어야 한다.
+      2. 버튼 클릭 후, 1부터 45 사이의 숫자 6개가 화면에 표시되어야 한다.
+      3. 표시된 6개의 숫자는 서로 중복되지 않아야 한다.
+      4. 표시된 6개의 숫자는 오름차순으로 정렬되어야 한다.
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-02"
+    related_use_case_id: "UC-01-01"
+    purpose: "추가 '번호 생성' 버튼 클릭 시 새로운 로또 번호 조합이 생성되는지 검증"
+    setup: "로또 번호 생성 앱 페이지에 접속하여 한 번 번호를 생성한 상태이다."
+    action: "이전에 생성된 번호를 확인한 후, '번호 생성' 버튼을 다시 클릭한다."
+    expected_result: |
+      1. 이전에 생성된 번호와 다른 새로운 6개의 로또 번호가 화면에 표시되어야 한다.
+      2. 새로운 번호 조합도 1부터 45 사이의 중복 없는 6개 숫자이며 오름차순으로 정렬되어야 한다.
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+
+coverage_summary:
+  uncovered_items: []
+  design_notes:
+    - "모든 Acceptance Criteria는 2개의 테스트 시나리오를 통해 검증된다."
+    - "번호 생성 로직의 정확성(범위, 중복 없음, 개수)은 UI에 표시되는 최종 결과를 통해 런타임 검증을 우선한다. 필요시 CodeAgent 단계에서 추가적인 로직 검증을 고려할 수 있다."

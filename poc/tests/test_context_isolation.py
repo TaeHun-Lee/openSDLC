@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from registry.models import StepDefinition
-from executor.generic_agent import create_agent_node, _build_user_message
+from prompts.message_strategies import build_user_message
 from registry.agent_registry import get_agent
 from pipeline.state import PipelineState
 
@@ -24,8 +24,10 @@ def _make_state(**overrides) -> PipelineState:
         "steps_completed": [],
         "latest_artifacts": {},
         "current_step_index": 0,
-        "iteration_count": 0,
+        "iteration_count": 1,
         "max_iterations": 3,
+        "rework_count": 0,
+        "max_reworks_per_gate": 3,
         "pipeline_status": "running",
     }
     base.update(overrides)
@@ -58,7 +60,7 @@ def test_validator_user_message_contains_only_artifact():
     validator_config = get_agent("ValidatorAgent")
     validator_step = StepDefinition(step=2, agent="ValidatorAgent", on_fail="ReqAgent")
 
-    user_msg = _build_user_message(validator_config, validator_step, state)
+    user_msg = build_user_message(validator_config, validator_step, state)
 
     # ReqAgent system prompt content must NOT appear in user message
     assert "ReqAgent Role" not in user_msg, \
@@ -86,7 +88,7 @@ def test_req_agent_does_not_receive_validator_system_prompt():
     req_config = get_agent("ReqAgent")
     req_step = StepDefinition(step=1, agent="ReqAgent")
 
-    user_msg = _build_user_message(req_config, req_step, state)
+    user_msg = build_user_message(req_config, req_step, state)
 
     # Must contain the validation report and previous artifact
     assert "fail" in user_msg

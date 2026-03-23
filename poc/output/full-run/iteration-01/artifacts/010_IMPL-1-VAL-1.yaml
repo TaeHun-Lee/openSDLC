@@ -1,0 +1,114 @@
+artifact_id: "IMPL-1-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2024-07-29T11:06:00Z"
+source_artifact_ids:
+  - "IMPL-1"
+status: "actionable"
+summary: "ImplementationArtifact는 스키마 및 범위 준수 검사를 통과했으나, 추적성 증거에 필수적인 코드 라인 번호가 누락되어 다운스트림 검증에 위험을 초래할 수 있으므로 'warning'으로 판정합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "IMPL-1"
+validated_artifact_type: "ImplementationArtifact"
+validated_stage: "IMPL"
+validation_attempt: 1
+validation_result: "warning"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "모든 필수 필드가 ImplementationArtifact 템플릿에 따라 작성되었습니다."
+  - check_name: "traceability"
+    result: "warning"
+    evidence: "source_artifact_ids가 존재하지만, implemented_by 필드에 코드 라인 번호가 누락되었습니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "CodeAgent는 주어진 요구사항 범위 내에서 구현 역할만 수행했습니다."
+  - check_name: "scope_adherence"
+    result: "pass"
+    evidence: "구현된 기능은 implementation_target에 명시된 유스케이스(UC-1-01, UC-1-02, UC-1-03)와 일치합니다."
+  - check_name: "implementation_consistency"
+    result: "pass"
+    evidence: "첨부된 코드(todo.py)는 summary와 implemented_features에 기술된 기능들을 실제로 포함하고 있습니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+
+warnings:
+  - "추적성 증거(`traceability.implemented_by`)가 파일 경로와 함수명 수준에서만 제공되고, OpenSDLC 절차(05-Artifact-Procedures.md 제3조)에서 요구하는 '실제 라인 번호 범위'가 누락되었습니다. 이는 후속 테스트 및 검증 단계에서 모호성을 유발하고 추적성을 저해할 수 있는 위험 요소입니다."
+
+next_action:
+  action: "proceed"
+  target_agent: "TestAgent"
+  reason: "비차단성 경고(증거 정밀도 부족)가 발행되었습니다. PMAgent는 TestAgent로 핸드오프를 확정하기 전에 이 경고를 검토해야 합니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

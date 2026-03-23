@@ -1,0 +1,127 @@
+artifact_id: "TD-01-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-10-27T10:00:00Z"
+source_artifact_ids:
+  - "TD-01"
+status: "approved"
+summary: "TestDesignArtifact 'TD-01'이 스키마, 추적성, 커버리지 및 시나리오 품질 요구사항을 충족하여 승인되었습니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TD-01"
+validated_artifact_type: "TestDesignArtifact"
+validated_stage: "TEST-DESIGN"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "TestDesignArtifact 'TD-01'은 필수 필드를 모두 포함하며 스키마를 준수합니다."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "source_artifact_ids에 'UC-01'이 올바르게 명시되어 있습니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent의 역할 범위(테스트 설계)를 준수하며, 요구사항 재정의나 구현 시도와 같은 위반 사항이 없습니다."
+  - check_name: "acceptance_criteria_coverage"
+    result: "pass"
+    evidence: "TestDesignArtifact에 명시된 모든 Acceptance Criteria는 'TS-01-01' 및 'TS-01-02' 시나리오에 의해 완전히 커버됩니다."
+  - check_name: "main_flow_coverage"
+    result: "pass"
+    evidence: "UseCase의 모든 Main Flow Steps가 'TS-01-01' 시나리오에 의해 커버됩니다."
+  - check_name: "precondition_coverage"
+    result: "pass"
+    evidence: "모든 Preconditions가 'TS-01-01' 시나리오에 의해 커버됩니다."
+  - check_name: "trigger_coverage"
+    result: "pass"
+    evidence: "모든 Triggers가 'TS-01-01' 시나리오에 의해 커버됩니다."
+  - check_name: "observable_outcome_coverage"
+    result: "pass"
+    evidence: "모든 Observable Outcomes가 'TS-01-01' 시나리오에 의해 커버됩니다."
+  - check_name: "scenario_quality"
+    result: "pass"
+    evidence: "두 시나리오('TS-01-01', 'TS-01-02') 모두 목적, 설정, 동작, 기대 결과가 명확하게 정의되어 있으며 테스트 가능합니다. 각 시나리오가 커버하는 범위가 명확하게 구분됩니다."
+  - check_name: "evidence_type_definition"
+    result: "pass"
+    evidence: "모든 시나리오의 evidence_type이 'runtime'으로 명확하게 정의되었고, runtime_evidence_required가 true로 설정되어 UI 기반 기능 검증에 적합합니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "CodeAgent"
+  reason: "TestDesignArtifact 'TD-01'이 모든 유효성 검사 기준을 충족하여 다음 단계인 CodeAgent로 진행합니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

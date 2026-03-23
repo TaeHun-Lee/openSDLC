@@ -11,8 +11,8 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Methodology directories (read-only)
-ENGINE_DIR = PROJECT_ROOT / "open-sdlc-engine"
-CONSTITUTION_DIR = PROJECT_ROOT / "open-sdlc-constitution"
+ENGINE_DIR = PROJECT_ROOT / "core" / "open-sdlc-engine"
+CONSTITUTION_DIR = PROJECT_ROOT / "core" / "open-sdlc-constitution"
 PROMPTS_DIR = ENGINE_DIR / "prompts" / "agent"
 TEMPLATES_DIR = ENGINE_DIR / "templates" / "artifacts"
 

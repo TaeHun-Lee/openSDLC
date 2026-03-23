@@ -27,6 +27,12 @@ class AgentConfig(BaseModel):
     persona: AgentPersona = Field(default_factory=AgentPersona)
     success_definition: list[str] = Field(default_factory=list)
 
+    # PoC overlay fields (populated from agent-config-overrides/)
+    constitution_sections: list[str] = Field(default_factory=list)
+    reference_templates: list[str] = Field(default_factory=list)
+    mandate_files: list[str] = Field(default_factory=list)
+    user_message_strategy: str = "input_assembler"
+
     class Config:
         extra = "allow"
 
@@ -48,5 +54,6 @@ class PipelineDefinition(BaseModel):
     """Complete user-defined pipeline."""
     name: str
     description: str = ""
-    max_iterations: int = 3
+    max_iterations: int = 3              # max full spiral iterations
+    max_reworks_per_gate: int = 3        # max rework retries per validation gate
     steps: list[StepDefinition]

@@ -1,0 +1,6 @@
+constitution_sections:
+  - "01-Foundation-Principles.md"
+  - "05-Artifact-Procedures.md"
+reference_templates: []
+mandate_files: []
+user_message_strategy: "input_assembler"
