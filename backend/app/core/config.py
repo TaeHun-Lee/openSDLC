@@ -47,3 +47,15 @@ LLM_MAX_RETRIES = int(os.environ.get("OPENSDLC_LLM_MAX_RETRIES", "2"))
 # Logging
 LOG_LEVEL = os.environ.get("OPENSDLC_LOG_LEVEL", "INFO")
 LOG_LLM_IO = os.environ.get("OPENSDLC_LOG_LLM_IO", "true").lower() == "true"
+
+# Persistence
+DATA_DIR = Path(os.environ.get("OPENSDLC_DATA_DIR", str(BACKEND_DIR / "data")))
+DATABASE_PATH = DATA_DIR / "opensdlc.db"
+RUNS_DIR = DATA_DIR / "runs"
+
+# CORS
+CORS_ORIGINS: list[str] = [
+    o.strip()
+    for o in os.environ.get("OPENSDLC_CORS_ORIGINS", "*").split(",")
+    if o.strip()
+]

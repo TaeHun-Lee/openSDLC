@@ -14,8 +14,8 @@ class ReportingEvent(TypedDict, total=False):
     target_agent: str
 
 
-class StepResult(TypedDict):
-    """Output of a single pipeline step."""
+class _StepResultRequired(TypedDict):
+    """Required fields for a pipeline step result."""
 
     step_id: str
     agent_id: str
@@ -25,6 +25,26 @@ class StepResult(TypedDict):
     validation_result: str | None
     narrative: str
     reporting_events: list[ReportingEvent]
+
+
+class StepResult(_StepResultRequired, total=False):
+    """Output of a single pipeline step (with optional tracking fields)."""
+
+    # LLM usage tracking
+    provider: str
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
+    # Timing
+    started_at: float
+    finished_at: float
+    # Position tracking
+    step_num: int
+    iteration_num: int
+    rework_seq: int
+    # PMAgent evaluation
+    satisfaction_score: int
 
 
 class PipelineState(TypedDict):

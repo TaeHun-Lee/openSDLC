@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import logging
+import time
 from collections.abc import Callable
 
 from app.core.registry.models import AgentConfig, StepDefinition
@@ -14,6 +15,7 @@ from app.core.llm_client import call_llm
 from app.core.artifacts.parser import split_narrative_and_yaml, parse_artifact, get_validation_result
 from app.core.reporting.event_parser import parse_reporting_events
 from app.core.pipeline.state import PipelineState, StepResult
+from app.services.print_capture import get_cancel_event
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,26 @@ def create_agent_node(
     output_type = _resolve_output_type(agent_config, step)
 
     def node_fn(state: PipelineState) -> dict:
+        # Check for cancellation before starting each step
+        cancel = get_cancel_event()
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError(f"Run cancelled before step {step.step} ({step.agent})")
+
         resolved_output_type = output_type.replace(
             "{NN}", f"{state['iteration_count']:02d}"
         )
 
         user_message = build_user_message(agent_config, step, state)
 
+        # Emit step_started marker (captured by print_capture → EventBus)
+        mode_suffix = f"({step.mode})" if step.mode else ""
+        print(
+            f"[__STEP_START__] step_num={step.step} agent={step.agent}"
+            f" iteration={state['iteration_count']} output={resolved_output_type}"
+            f" {mode_suffix}".rstrip()
+        )
+
+        started_at = time.time()
         response = call_llm(
             system=system_prompt,
             user_message=user_message,
@@ -103,6 +119,7 @@ def create_agent_node(
             max_tokens=step.max_tokens,
             min_response_chars=step.min_response_chars,
         )
+        finished_at = time.time()
 
         narrative, artifact_yaml = split_narrative_and_yaml(response.text)
 
@@ -147,7 +164,41 @@ def create_agent_node(
             validation_result=validation_result,
             narrative=narrative,
             reporting_events=reporting_events,
+            # LLM usage tracking
+            provider=response.provider,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cache_read_tokens=response.cache_read_tokens,
+            cache_creation_tokens=response.cache_creation_tokens,
+            # Timing
+            started_at=started_at,
+            finished_at=finished_at,
+            # Position
+            step_num=step.step,
+            iteration_num=state["iteration_count"],
+            rework_seq=state["rework_count"],
         )
+
+        # Emit step_completed marker (captured by print_capture → EventBus)
+        import json as _json
+        _step_end_data = {
+            "step_num": step.step,
+            "agent_id": step.agent,
+            "iteration_num": state["iteration_count"],
+            "output_type": resolved_output_type,
+            "model_used": response.model,
+            "provider": response.provider,
+            "input_tokens": response.input_tokens,
+            "output_tokens": response.output_tokens,
+            "cache_read_tokens": response.cache_read_tokens,
+            "cache_creation_tokens": response.cache_creation_tokens,
+            "validation_result": validation_result,
+            "mode": step.mode,
+            "rework_seq": state["rework_count"],
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+        print(f"[__STEP_END__] {_json.dumps(_step_end_data)}")
 
         new_latest = {**state["latest_artifacts"], resolved_output_type: artifact_yaml}
         new_steps = [*state["steps_completed"], step_result]
@@ -174,6 +225,7 @@ def create_agent_node(
                 pm_decision, pm_decision
             )
             print(f"[{step.agent}] Iteration 판정: {decision_label} (만족도: {score}/100)")
+            step_result["satisfaction_score"] = score
             state_update["pm_decision"] = pm_decision
 
             # Increment iteration_count when continuing

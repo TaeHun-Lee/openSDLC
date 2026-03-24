@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import AsyncIterator
@@ -48,15 +49,25 @@ class EventBus:
     - Uses loop.call_soon_threadsafe() to bridge threads safely.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        on_emit: Callable[[RunEvent], None] | None = None,
+    ) -> None:
         self._events: list[RunEvent] = []
         self._loop = loop or asyncio.get_event_loop()
         self._notify: asyncio.Event = asyncio.Event()
         self._closed = False
+        self._on_emit = on_emit
 
     def emit(self, event: RunEvent) -> None:
         """Append event and wake up SSE consumers. Thread-safe."""
         self._events.append(event)
+        if self._on_emit is not None:
+            try:
+                self._on_emit(event)
+            except Exception:
+                logger.exception("on_emit callback error")
         try:
             self._loop.call_soon_threadsafe(self._notify.set)
         except RuntimeError:

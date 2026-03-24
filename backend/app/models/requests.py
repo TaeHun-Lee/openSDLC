@@ -12,18 +12,42 @@ class StartRunRequest(BaseModel):
         ...,
         description="Pipeline name (e.g. 'full_spiral') or file path",
         min_length=1,
+        examples=["full_spiral"],
     )
     user_story: str = Field(
         ...,
         description="User story text to process",
         min_length=10,
+        examples=["간단한 할 일 관리 웹 앱을 만들어줘. 할 일 추가, 완료 체크, 삭제 기능이 필요해."],
     )
     max_iterations: int = Field(
-        default=3,
+        default=1,
         ge=1,
         le=10,
         description="Maximum rework iterations",
+        examples=[1],
     )
+    project_id: str | None = Field(
+        None,
+        description="Project ID to associate this run with",
+    )
+
+
+# --- Projects ---
+
+
+class CreateProjectRequest(BaseModel):
+    """Request body for POST /api/projects."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Project name")
+    description: str = Field("", max_length=500)
+
+
+class UpdateProjectRequest(BaseModel):
+    """Request body for PUT /api/projects/{project_id}."""
+
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=500)
 
 
 # --- Pipeline Editor ---
