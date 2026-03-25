@@ -9,12 +9,13 @@ from fastapi.responses import Response
 from app.core.config import PIPELINES_DIR
 from app.core.pipeline.graph_builder import load_pipeline_definition
 from app.models.requests import CreatePipelineRequest, UpdatePipelineRequest
-from app.models.responses import PipelineInfo, PipelineListItem, StepInfo
+from app.models.responses import PipelineInfo, PipelineListItem, PipelineValidationResult, StepInfo
 from app.services.pipeline_compiler import (
     compile_pipeline,
     load_and_merge_update,
     save_pipeline_yaml,
     validate_pipeline_request,
+    validate_pipeline_runtime,
 )
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
@@ -83,6 +84,24 @@ async def get_pipeline(name: str) -> PipelineInfo:
         raise HTTPException(status_code=404, detail=f"Pipeline '{name}' not found")
 
     return _to_pipeline_info(path, is_default=_is_default(name))
+
+
+# --- VALIDATE ---
+
+
+@router.post("/{name}/validate", response_model=PipelineValidationResult)
+async def validate_pipeline(name: str) -> PipelineValidationResult:
+    """Validate a pipeline definition against the runtime environment.
+
+    Checks agent existence, API key availability, artifact input/output
+    compatibility, rework routing reachability, and iteration routing.
+    """
+    path = PIPELINES_DIR / f"{name}.yaml"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Pipeline '{name}' not found")
+
+    pipeline_def = load_pipeline_definition(path)
+    return validate_pipeline_runtime(pipeline_def)
 
 
 # --- CREATE ---

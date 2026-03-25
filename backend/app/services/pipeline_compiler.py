@@ -6,11 +6,28 @@ from pathlib import Path
 
 import yaml
 
-from app.core.registry.agent_registry import load_all_agents
+from app.core.config import (
+    get_anthropic_api_key,
+    get_google_api_key,
+    get_llm_provider,
+    get_openai_api_key,
+)
+from app.core.registry.agent_registry import get_agent, load_all_agents
 from app.core.registry.models import PipelineDefinition, StepDefinition
 from app.models.requests import CreatePipelineRequest, PipelineStepInput
+from app.models.responses import (
+    ArtifactFlowStep,
+    PipelineValidationResult,
+    ValidationIssue,
+)
 
 _VALID_PROVIDERS = {"anthropic", "google", "openai"}
+
+_PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
 
 
 def validate_pipeline_request(
@@ -176,4 +193,133 @@ def load_and_merge_update(
         max_iterations=merged_iter,
         max_reworks_per_gate=merged_reworks,
         steps=merged_steps,
+    )
+
+
+def validate_pipeline_runtime(pipeline_def: PipelineDefinition) -> PipelineValidationResult:
+    """Validate a pipeline definition against runtime environment and agent configs.
+
+    Checks:
+    - Agent existence in registry (error)
+    - API key availability for each step's provider (warning)
+    - Artifact input/output compatibility between steps (warning)
+    - Rework routing reachability — on_fail target in graph (error)
+    - Iteration routing — PMAgent presence and on_next_iteration (warning)
+
+    Returns a PipelineValidationResult with errors, warnings, and artifact_flow.
+    """
+    errors: list[ValidationIssue] = []
+    warnings: list[ValidationIssue] = []
+    artifact_flow: list[ArtifactFlowStep] = []
+
+    available_agents = load_all_agents()
+    default_provider = get_llm_provider()
+
+    # Track which artifact types are available at each point in the pipeline
+    available_artifacts: set[str] = set()
+    step_agents: dict[int, str] = {}  # step_num -> agent_id
+
+    for step_def in pipeline_def.steps:
+        step_num = step_def.step
+        agent_id = step_def.agent
+        step_agents[step_num] = agent_id
+
+        # 1. Agent existence
+        if agent_id not in available_agents:
+            errors.append(ValidationIssue(
+                type="unknown_agent",
+                step=step_num,
+                agent=agent_id,
+                message=f"Agent '{agent_id}' not found in registry. "
+                        f"Available: {sorted(available_agents.keys())}",
+            ))
+            artifact_flow.append(ArtifactFlowStep(
+                step=step_num, agent=agent_id,
+            ))
+            continue
+
+        agent_config = available_agents[agent_id]
+
+        # 2. API key check
+        provider = step_def.provider or default_provider
+        key_fn = {
+            "anthropic": get_anthropic_api_key,
+            "google": get_google_api_key,
+            "openai": get_openai_api_key,
+        }.get(provider)
+        if key_fn and not key_fn():
+            env_var = _PROVIDER_KEY_ENV.get(provider, f"{provider.upper()}_API_KEY")
+            warnings.append(ValidationIssue(
+                type="api_key_missing",
+                step=step_num,
+                agent=agent_id,
+                provider=provider,
+                message=f"{env_var} environment variable is not set",
+            ))
+
+        # 3. Artifact flow analysis
+        consumes: list[str] = []
+        produces: list[str] = list(agent_config.primary_outputs)
+
+        for inp in agent_config.primary_inputs:
+            consumes.append(inp)
+            if inp not in available_artifacts and available_artifacts:
+                warnings.append(ValidationIssue(
+                    type="input_not_available",
+                    step=step_num,
+                    agent=agent_id,
+                    message=f"Agent '{agent_id}' expects input '{inp}' "
+                            f"but it has not been produced by any preceding step. "
+                            f"Available: {sorted(available_artifacts) or '(none)'}",
+                ))
+
+        artifact_flow.append(ArtifactFlowStep(
+            step=step_num, agent=agent_id,
+            produces=produces, consumes=consumes,
+        ))
+
+        available_artifacts.update(produces)
+
+        # 4. Rework routing reachability
+        if step_def.on_fail:
+            target_exists = any(
+                s.agent == step_def.on_fail
+                for s in pipeline_def.steps
+                if s.step < step_num
+            )
+            if not target_exists:
+                errors.append(ValidationIssue(
+                    type="unreachable_rework_target",
+                    step=step_num,
+                    agent=agent_id,
+                    message=f"on_fail target '{step_def.on_fail}' is not a preceding "
+                            f"step in the pipeline",
+                ))
+
+    # 5. Iteration routing check
+    has_pm = any(s.agent == "PMAgent" for s in pipeline_def.steps)
+    if pipeline_def.max_iterations > 1 and not has_pm:
+        warnings.append(ValidationIssue(
+            type="no_pm_agent",
+            message="max_iterations > 1 but no PMAgent in pipeline. "
+                    "Pipeline will run only 1 iteration.",
+        ))
+
+    if has_pm:
+        pm_step = next(s for s in pipeline_def.steps if s.agent == "PMAgent")
+        if not pm_step.on_next_iteration:
+            warnings.append(ValidationIssue(
+                type="missing_iteration_routing",
+                step=pm_step.step,
+                agent="PMAgent",
+                message="PMAgent has no on_next_iteration target. "
+                        "Iteration loop will not function.",
+            ))
+
+    valid = len(errors) == 0
+    return PipelineValidationResult(
+        valid=valid,
+        errors=errors,
+        warnings=warnings,
+        artifact_flow=artifact_flow,
     )

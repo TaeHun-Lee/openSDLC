@@ -21,13 +21,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.artifacts.code_extractor import write_code_files
 from app.core.artifacts.parser import extract_artifact_id
-from app.core.config import PIPELINES_DIR, RUNS_DIR
+from app.core.config import PIPELINES_DIR, get_runs_dir
 from app.core.llm_client import QuotaExhaustedError
-from app.core.pipeline.graph_builder import load_pipeline_definition, run_pipeline
+from app.core.pipeline.graph_builder import load_pipeline_definition, resume_pipeline, run_pipeline
+from app.core.pipeline.state import PipelineState, StepResult
 from app.db import repository as repo
 from app.db.models import Event as EventModel
 from app.services.event_bus import EventBus, EventType, RunEvent
-from app.services.print_capture import capture_prints, make_event_callback
+from app.services.print_capture import capture_prints
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,9 @@ class RunRecord:
     current_step: int | None = None
     current_agent: str | None = None
     steps_total: int | None = None
+    # Webhook notification
+    webhook_url: str | None = None
+    webhook_events: list[str] | None = None  # e.g. ["completed", "failed"]
 
 
 class RunManager:
@@ -114,6 +118,168 @@ class RunManager:
         return True
 
     # ------------------------------------------------------------------
+    # Resume
+    # ------------------------------------------------------------------
+
+    def _restore_pipeline_state(self, run_id: str) -> PipelineState:
+        """Restore PipelineState from DB for a previously interrupted run.
+
+        Reads completed steps and their artifacts from DB, reconstructing the
+        state dict that LangGraph needs to resume execution.
+        """
+        with self._session_factory() as session:
+            db_run = repo.get_run(session, run_id)
+            if db_run is None:
+                raise ValueError(f"Run '{run_id}' not found in DB")
+
+            db_steps = repo.get_steps_for_run(session, run_id)
+
+            # Rebuild steps_completed list
+            steps_completed: list[StepResult] = []
+            latest_artifacts: dict[str, str] = {}
+            last_iteration = 1
+            last_rework_count = 0
+            pm_decision = ""
+
+            for db_step in db_steps:
+                # Only include steps that actually completed (have finished_at)
+                if db_step.finished_at is None:
+                    continue
+
+                # Read artifact YAML from disk
+                artifact_yaml = ""
+                artifact_type = ""
+                for art in db_step.artifacts:
+                    artifact_type = art.artifact_type or ""
+                    fpath = Path(art.file_path)
+                    if fpath.is_file():
+                        artifact_yaml = fpath.read_text(encoding="utf-8")
+                        latest_artifacts[artifact_type] = artifact_yaml
+                    break  # one artifact per step
+
+                step_result = StepResult(
+                    step_id=f"step_{db_step.step_num}_{db_step.agent_name}",
+                    agent_id=db_step.agent_name,
+                    artifact_yaml=artifact_yaml,
+                    artifact_type=artifact_type,
+                    model_used=db_step.model_used or "",
+                    validation_result=db_step.verdict,
+                    narrative="",  # narrative not persisted to DB
+                    reporting_events=[],
+                )
+                # Optional tracking fields
+                step_result["provider"] = db_step.provider or ""
+                step_result["input_tokens"] = db_step.input_tokens
+                step_result["output_tokens"] = db_step.output_tokens
+                step_result["cache_read_tokens"] = db_step.cache_read_tokens
+                step_result["cache_creation_tokens"] = db_step.cache_creation_tokens
+                step_result["started_at"] = db_step.started_at or 0
+                step_result["finished_at"] = db_step.finished_at or 0
+                step_result["step_num"] = db_step.step_num
+                step_result["iteration_num"] = db_step.iteration_num
+                step_result["rework_seq"] = db_step.rework_seq or 0
+
+                steps_completed.append(step_result)
+                last_iteration = max(last_iteration, db_step.iteration_num)
+
+                # Track rework state
+                if db_step.verdict in ("fail", "warning"):
+                    last_rework_count += 1
+                elif db_step.verdict == "pass":
+                    last_rework_count = 0
+
+            # Determine pm_decision from the last PMAgent step
+            for sr in reversed(steps_completed):
+                if sr["agent_id"] == "PMAgent":
+                    # If PM said "continue", iteration_count was already incremented
+                    # We need to preserve that
+                    pm_decision = "continue"  # assume continue since pipeline didn't end
+                    break
+
+            state: PipelineState = {
+                "user_story": db_run.user_story,
+                "steps_completed": steps_completed,
+                "latest_artifacts": latest_artifacts,
+                "current_step_index": 0,
+                "iteration_count": last_iteration,
+                "max_iterations": db_run.max_iterations or 3,
+                "rework_count": last_rework_count,
+                "max_reworks_per_gate": 3,  # will be overridden by pipeline_def
+                "pipeline_status": "running",
+                "pm_decision": pm_decision,
+            }
+            return state
+
+    async def resume_run(self, run_id: str) -> RunRecord:
+        """Resume a previously failed/cancelled run from where it stopped.
+
+        Restores PipelineState from DB and re-executes the pipeline graph.
+        The graph will replay routing decisions based on restored state,
+        effectively skipping already-completed steps.
+        """
+        loop = asyncio.get_running_loop()
+
+        # Validate the run exists and is in a resumable state
+        with self._session_factory() as session:
+            db_run = repo.get_run(session, run_id)
+            if db_run is None:
+                raise ValueError(f"Run '{run_id}' not found")
+            if db_run.status not in ("failed", "cancelled"):
+                raise ValueError(
+                    f"Run '{run_id}' cannot be resumed (status: {db_run.status}). "
+                    f"Only 'failed' or 'cancelled' runs can be resumed."
+                )
+            pipeline_name = db_run.pipeline_name
+            max_iterations = db_run.max_iterations or 3
+
+            # Restore webhook settings
+            webhook_url = db_run.webhook_url
+            webhook_events: list[str] | None = None
+            if db_run.webhook_events:
+                try:
+                    webhook_events = json.loads(db_run.webhook_events)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Reset run status to running
+            repo.update_run_status(session, run_id, "running", error=None)
+
+        # Clean up incomplete step rows (started but never finished)
+        with self._session_factory() as session:
+            repo.delete_incomplete_steps(session, run_id)
+
+        # Restore state
+        restored_state = self._restore_pipeline_state(run_id)
+
+        # Pre-seed step counters so new steps get correct sequential numbers
+        resume_step_counts: dict[int, int] = {}
+        for sr in restored_state["steps_completed"]:
+            iter_num = sr.get("iteration_num", 1)
+            resume_step_counts[iter_num] = resume_step_counts.get(iter_num, 0) + 1
+
+        on_emit, artifact_saver = self._make_run_callbacks(
+            run_id, resume_step_counts=resume_step_counts,
+        )
+
+        record = RunRecord(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            user_story=restored_state["user_story"],
+            max_iterations=max_iterations,
+            status=RunStatus.PENDING,
+            event_bus=EventBus(loop=loop, on_emit=on_emit),
+            current_iteration=restored_state["iteration_count"],
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
+        )
+        record._artifact_saver = artifact_saver  # type: ignore[attr-defined]
+        record._restored_state = restored_state  # type: ignore[attr-defined]
+        self._active_runs[run_id] = record
+
+        asyncio.create_task(self._execute_run(record, is_resume=True))
+        return record
+
+    # ------------------------------------------------------------------
     # Run lifecycle
     # ------------------------------------------------------------------
 
@@ -123,10 +289,18 @@ class RunManager:
         user_story: str,
         max_iterations: int = 3,
         project_id: str | None = None,
+        webhook_url: str | None = None,
+        webhook_events: list[str] | None = None,
     ) -> RunRecord:
         """Start a pipeline run in the background. Returns immediately."""
         run_id = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
+
+        # Normalize webhook_events to JSON string for DB storage
+        webhook_events_json: str | None = None
+        if webhook_url and webhook_events:
+            import json as _json
+            webhook_events_json = _json.dumps(webhook_events)
 
         # Persist to DB
         with self._session_factory() as session:
@@ -137,7 +311,11 @@ class RunManager:
                 user_story=user_story,
                 max_iterations=max_iterations,
                 project_id=project_id,
+                webhook_url=webhook_url,
+                webhook_events=webhook_events_json,
             )
+
+        on_emit, artifact_saver = self._make_run_callbacks(run_id)
 
         record = RunRecord(
             run_id=run_id,
@@ -145,21 +323,33 @@ class RunManager:
             user_story=user_story,
             max_iterations=max_iterations,
             status=RunStatus.PENDING,
-            event_bus=EventBus(
-                loop=loop,
-                on_emit=self._make_realtime_db_callback(run_id),
-            ),
+            event_bus=EventBus(loop=loop, on_emit=on_emit),
             project_id=project_id,
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
         )
+        record._artifact_saver = artifact_saver  # type: ignore[attr-defined]
         self._active_runs[run_id] = record
 
         asyncio.create_task(self._execute_run(record))
         return record
 
-    def _make_realtime_db_callback(self, run_id: str):
-        """Create an on_emit callback that persists iteration/step to DB in real time."""
-        iterations_created: set[int] = set()
-        step_counter_per_iter: dict[int, int] = {}
+    def _make_run_callbacks(
+        self,
+        run_id: str,
+        *,
+        resume_step_counts: dict[int, int] | None = None,
+    ):
+        """Create on_emit callback and artifact saver sharing step tracking state.
+
+        Args:
+            resume_step_counts: Pre-seed iteration→step-count for resume so
+                that new steps get the correct sequential step numbers.
+
+        Returns (on_emit, artifact_saver) tuple.
+        """
+        iterations_created: set[int] = set(resume_step_counts) if resume_step_counts else set()
+        step_counter_per_iter: dict[int, int] = dict(resume_step_counts) if resume_step_counts else {}
 
         def _on_emit(event: RunEvent) -> None:
             record = self._active_runs.get(run_id)
@@ -218,22 +408,71 @@ class RunManager:
                         finished_at=data.get("finished_at"),
                     )
 
-        return _on_emit
+        def _artifact_saver(
+            iter_num: int,
+            agent_id: str,
+            artifact_type: str,
+            artifact_yaml: str,
+        ) -> None:
+            """Save artifact YAML to disk and DB immediately after step completion."""
+            step_num_in_iter = step_counter_per_iter.get(iter_num, 1)
+            try:
+                artifact_id = extract_artifact_id(artifact_yaml)
+                file_path = self._save_artifact_file(
+                    run_id, iter_num, step_num_in_iter, artifact_type, artifact_yaml,
+                )
+                with self._session_factory() as session:
+                    repo.insert_artifact(
+                        session,
+                        run_id=run_id,
+                        iteration_num=iter_num,
+                        step_num=step_num_in_iter,
+                        agent_name=agent_id,
+                        artifact_type=artifact_type,
+                        artifact_id=artifact_id,
+                        file_path=str(file_path),
+                    )
 
-    async def _execute_run(self, record: RunRecord) -> None:
+                # Extract code files immediately for ImplementationArtifact
+                if artifact_type.startswith("ImplementationArtifact"):
+                    workspace_dir = get_runs_dir() / run_id / f"iteration-{iter_num:02d}" / "workspace"
+                    written = write_code_files(artifact_yaml, workspace_dir)
+                    with self._session_factory() as session:
+                        for fpath in written:
+                            rel = str(fpath.relative_to(workspace_dir))
+                            repo.insert_code_file(
+                                session,
+                                run_id=run_id,
+                                iteration_num=iter_num,
+                                relative_path=rel,
+                                file_path=str(fpath),
+                                size_bytes=fpath.stat().st_size,
+                            )
+            except Exception:
+                logger.exception(
+                    "Failed to save artifact for run=%s iter=%d step=%d",
+                    run_id, iter_num, step_num_in_iter,
+                )
+
+        return _on_emit, _artifact_saver
+
+    async def _execute_run(self, record: RunRecord, is_resume: bool = False) -> None:
         """Acquire semaphore, run pipeline in thread, emit events, persist results."""
         async with self._semaphore:
             record.status = RunStatus.RUNNING
-            with self._session_factory() as session:
-                repo.update_run_status(session, record.run_id, "running")
+            if not is_resume:
+                with self._session_factory() as session:
+                    repo.update_run_status(session, record.run_id, "running")
 
+            mode_label = "resuming" if is_resume else "starting"
             record.event_bus.emit(
                 RunEvent(
                     event_type=EventType.PIPELINE_STARTED,
                     data={
                         "run_id": record.run_id,
                         "pipeline": record.pipeline_name,
-                        "message": f"Pipeline '{record.pipeline_name}' starting",
+                        "message": f"Pipeline '{record.pipeline_name}' {mode_label}",
+                        "is_resume": is_resume,
                     },
                 )
             )
@@ -246,13 +485,20 @@ class RunManager:
             pipeline_def.max_iterations = record.max_iterations
             record.steps_total = len(pipeline_def.steps)
 
-            callback = make_event_callback(record.event_bus)
+            artifact_saver = getattr(record, "_artifact_saver", None)
+            restored_state = getattr(record, "_restored_state", None)
 
             def _run_sync() -> dict:
                 # Check cancellation before starting
                 if record.cancel_event.is_set():
                     raise CancelledError(record.run_id)
-                with capture_prints(callback, cancel_event=record.cancel_event):
+                with capture_prints(
+                    event_emitter=record.event_bus.emit,
+                    cancel_event=record.cancel_event,
+                    artifact_saver=artifact_saver,
+                ):
+                    if is_resume and restored_state is not None:
+                        return resume_pipeline(pipeline_def, restored_state)
                     return run_pipeline(pipeline_def, record.user_story)
 
             try:
@@ -260,6 +506,25 @@ class RunManager:
                 record.final_state = dict(final_state)
                 record.status = RunStatus.COMPLETED
                 record.finished_at = time.time()
+
+                # Finalize DB state (status, iterations, events) before emitting completion
+                try:
+                    await asyncio.to_thread(self._persist_completed_run, record)
+                except Exception:
+                    logger.exception(
+                        "Post-run persistence failed for run %s (pipeline succeeded)",
+                        record.run_id,
+                    )
+                    # Still mark as completed — pipeline itself succeeded.
+                    # Artifacts are already saved in real-time; only event log may be lost.
+                    try:
+                        with self._session_factory() as session:
+                            repo.update_run_status(
+                                session, record.run_id, "completed",
+                                finished_at=record.finished_at,
+                            )
+                    except Exception:
+                        logger.exception("Failed to update run status for %s", record.run_id)
 
                 pipeline_status = final_state.get("pipeline_status", "unknown")
                 record.event_bus.emit(
@@ -274,11 +539,6 @@ class RunManager:
                     )
                 )
 
-                # Persist remaining data (artifacts, code files, events) to DB + filesystem
-                await asyncio.to_thread(
-                    self._persist_completed_run, record
-                )
-
             except (CancelledError, InterruptedError):
                 record.status = RunStatus.CANCELLED
                 record.finished_at = time.time()
@@ -289,11 +549,8 @@ class RunManager:
                         data={"run_id": record.run_id, "error": record.error, "type": "cancelled"},
                     )
                 )
-                with self._session_factory() as session:
-                    repo.update_run_status(
-                        session, record.run_id, "cancelled",
-                        finished_at=record.finished_at, error=record.error,
-                    )
+                self._safe_update_run_status(record.run_id, "cancelled", record.finished_at, record.error)
+
             except QuotaExhaustedError as exc:
                 record.status = RunStatus.FAILED
                 record.finished_at = time.time()
@@ -304,11 +561,8 @@ class RunManager:
                         data={"run_id": record.run_id, "error": str(exc), "type": "quota_exhausted"},
                     )
                 )
-                with self._session_factory() as session:
-                    repo.update_run_status(
-                        session, record.run_id, "failed",
-                        finished_at=record.finished_at, error=record.error,
-                    )
+                self._safe_update_run_status(record.run_id, "failed", record.finished_at, record.error)
+
             except Exception as exc:
                 record.status = RunStatus.FAILED
                 record.finished_at = time.time()
@@ -320,26 +574,42 @@ class RunManager:
                         data={"run_id": record.run_id, "error": record.error},
                     )
                 )
-                with self._session_factory() as session:
-                    repo.update_run_status(
-                        session, record.run_id, "failed",
-                        finished_at=record.finished_at, error=record.error,
-                    )
+                self._safe_update_run_status(record.run_id, "failed", record.finished_at, record.error)
+
             finally:
                 record.event_bus.close()
+                record.event_bus.clear()
+                # Send webhook notification (fire-and-forget)
+                if record.webhook_url:
+                    asyncio.create_task(self._send_webhook(record))
                 # Clean up active run from memory
                 self._active_runs.pop(record.run_id, None)
+
+    def _safe_update_run_status(
+        self,
+        run_id: str,
+        status: str,
+        finished_at: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Update run status in DB with exception safety."""
+        try:
+            with self._session_factory() as session:
+                repo.update_run_status(session, run_id, status, finished_at=finished_at, error=error)
+        except Exception:
+            logger.exception("Failed to update run status for %s to '%s'", run_id, status)
 
     # ------------------------------------------------------------------
     # Post-run persistence (called from thread)
     # ------------------------------------------------------------------
 
     def _persist_completed_run(self, record: RunRecord) -> None:
-        """Persist remaining data from a completed run to DB and filesystem.
+        """Finalize a completed run in DB.
 
-        Iterations and steps are already created in real time via the on_emit callback.
-        This method handles: run status update, artifacts, code files, events, and
-        iteration finalization (satisfaction scores, finished_at).
+        Iterations, steps, artifacts, and code files are already persisted in
+        real time via on_emit callback and artifact_saver.
+        This method handles: run status update, rework_seq backfill,
+        satisfaction scores, iteration finalization, and event log persistence.
         """
         final_state = record.final_state
         if not final_state:
@@ -355,7 +625,7 @@ class RunManager:
                 finished_at=record.finished_at,
             )
 
-            # 2) Save artifacts and update iteration metadata
+            # 2) Backfill metadata not available at real-time callback time
             iterations_seen: set[int] = set()
             step_counter_per_iter: dict[int, int] = {}
 
@@ -371,25 +641,6 @@ class RunManager:
                     repo.update_step(
                         session, run_id, iter_num, step_num_in_iter,
                         rework_seq=rework_seq,
-                    )
-
-                # Save artifact YAML to filesystem
-                artifact_yaml = sr.get("artifact_yaml", "")
-                if artifact_yaml:
-                    artifact_type = sr.get("artifact_type", "unknown")
-                    artifact_id = extract_artifact_id(artifact_yaml)
-                    file_path = self._save_artifact_file(
-                        run_id, iter_num, step_num_in_iter, artifact_type, artifact_yaml,
-                    )
-                    repo.insert_artifact(
-                        session,
-                        run_id=run_id,
-                        iteration_num=iter_num,
-                        step_num=step_num_in_iter,
-                        agent_name=sr["agent_id"],
-                        artifact_type=artifact_type,
-                        artifact_id=artifact_id,
-                        file_path=str(file_path),
                     )
 
                 # PMAgent satisfaction score → update iteration
@@ -414,10 +665,7 @@ class RunManager:
                     finished_at=last_finished,
                 )
 
-            # 4) Extract and save code files for each iteration
-            self._persist_code_files(session, run_id, steps_completed)
-
-            # 5) Persist events from EventBus
+            # 4) Persist events from EventBus
             self._persist_events(session, record)
 
     def _save_artifact_file(
@@ -429,42 +677,12 @@ class RunManager:
         yaml_content: str,
     ) -> Path:
         """Write artifact YAML to filesystem, return the path."""
-        artifact_dir = RUNS_DIR / run_id / f"iteration-{iteration_num:02d}" / "artifacts"
+        artifact_dir = get_runs_dir() / run_id / f"iteration-{iteration_num:02d}" / "artifacts"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{step_num:03d}_{artifact_type}.yaml"
         file_path = artifact_dir / filename
         file_path.write_text(yaml_content, encoding="utf-8")
         return file_path
-
-    def _persist_code_files(
-        self,
-        session: Session,
-        run_id: str,
-        steps_completed: list[dict],
-    ) -> None:
-        """Extract code files from ImplementationArtifact and save to filesystem."""
-        # Group by iteration — use the latest ImplementationArtifact per iteration
-        impl_per_iter: dict[int, str] = {}
-        for sr in steps_completed:
-            if sr.get("artifact_type", "").startswith("ImplementationArtifact"):
-                iter_num = sr.get("iteration_num", 1)
-                impl_per_iter[iter_num] = sr.get("artifact_yaml", "")
-
-        for iter_num, impl_yaml in impl_per_iter.items():
-            if not impl_yaml:
-                continue
-            workspace_dir = RUNS_DIR / run_id / f"iteration-{iter_num:02d}" / "workspace"
-            written = write_code_files(impl_yaml, workspace_dir)
-            for fpath in written:
-                rel = str(fpath.relative_to(workspace_dir))
-                repo.insert_code_file(
-                    session,
-                    run_id=run_id,
-                    iteration_num=iter_num,
-                    relative_path=rel,
-                    file_path=str(fpath),
-                    size_bytes=fpath.stat().st_size,
-                )
 
     def _persist_events(self, session: Session, record: RunRecord) -> None:
         """Batch-persist all EventBus events to DB."""
@@ -487,7 +705,7 @@ class RunManager:
                 current_iteration = data.get("iteration_num", current_iteration)
                 current_agent = data.get("agent_id")
             else:
-                # Use embedded context from print_capture if available
+                # Use embedded context if available
                 if "iteration_num" in data:
                     current_iteration = data["iteration_num"]
                 if "step_num" in data:
@@ -508,3 +726,72 @@ class RunManager:
             ))
 
         repo.bulk_insert_events(session, db_events)
+
+    # ------------------------------------------------------------------
+    # Webhook notification
+    # ------------------------------------------------------------------
+
+    async def _send_webhook(self, record: RunRecord, max_retries: int = 3) -> None:
+        """Send webhook notification for a completed/failed/cancelled run.
+
+        Retries up to max_retries times with exponential backoff.
+        Failures are logged but never affect run state.
+        """
+        if not record.webhook_url:
+            return
+
+        # Check if this status is in the subscribed event list
+        status_value = record.status.value  # completed, failed, cancelled
+        if record.webhook_events and status_value not in record.webhook_events:
+            return
+
+        total_tokens = 0
+        iterations_completed = 0
+        if record.final_state:
+            for sr in record.final_state.get("steps_completed", []):
+                total_tokens += (sr.get("input_tokens") or 0) + (sr.get("output_tokens") or 0)
+            iterations_completed = record.final_state.get("iteration_count", 0)
+
+        elapsed = round(record.finished_at - record.created_at, 1) if record.finished_at else None
+
+        payload = {
+            "run_id": record.run_id,
+            "status": status_value,
+            "pipeline_name": record.pipeline_name,
+            "project_id": record.project_id,
+            "iterations_completed": iterations_completed,
+            "total_tokens": total_tokens,
+            "elapsed_seconds": elapsed,
+            "error": record.error,
+            "artifacts_url": f"/api/runs/{record.run_id}/artifacts",
+        }
+
+        import httpx
+
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(record.webhook_url, json=payload)
+                    if resp.status_code < 400:
+                        logger.info(
+                            "Webhook sent for run %s → %s (status %d)",
+                            record.run_id, record.webhook_url, resp.status_code,
+                        )
+                        return
+                    logger.warning(
+                        "Webhook returned %d for run %s (attempt %d/%d)",
+                        resp.status_code, record.run_id, attempt + 1, max_retries,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Webhook failed for run %s (attempt %d/%d): %s",
+                    record.run_id, attempt + 1, max_retries, exc,
+                )
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s backoff
+
+        logger.error(
+            "Webhook exhausted retries for run %s → %s",
+            record.run_id, record.webhook_url,
+        )

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
@@ -94,6 +94,8 @@ def create_run(
     user_story: str,
     max_iterations: int = 3,
     project_id: str | None = None,
+    webhook_url: str | None = None,
+    webhook_events: str | None = None,
 ) -> Run:
     run = Run(
         run_id=run_id,
@@ -103,6 +105,8 @@ def create_run(
         status="pending",
         max_iterations=max_iterations,
         created_at=time.time(),
+        webhook_url=webhook_url,
+        webhook_events=webhook_events,
     )
     session.add(run)
     session.commit()
@@ -121,6 +125,26 @@ def list_runs(
     if project_id is not None:
         stmt = stmt.where(Run.project_id == project_id)
     return session.scalars(stmt).all()
+
+
+def cleanup_zombie_runs(session: Session) -> int:
+    """Mark any 'pending' or 'running' runs as 'failed' (server crash recovery).
+
+    Returns the number of runs cleaned up.
+    """
+    now = time.time()
+    stmt = (
+        update(Run)
+        .where(Run.status.in_(["pending", "running"]))
+        .values(
+            status="failed",
+            finished_at=now,
+            error="Server restarted — run interrupted",
+        )
+    )
+    result = session.execute(stmt)
+    session.commit()
+    return result.rowcount  # type: ignore[return-value]
 
 
 def update_run_status(
@@ -161,6 +185,21 @@ def create_iteration(
     session.add(iteration)
     session.commit()
     return iteration
+
+
+def get_iteration(
+    session: Session, run_id: str, iteration_num: int,
+) -> Iteration | None:
+    """Get a single iteration with eager-loaded steps, artifacts, and code_files."""
+    stmt = (
+        select(Iteration)
+        .where(Iteration.run_id == run_id, Iteration.iteration_num == iteration_num)
+        .options(
+            joinedload(Iteration.steps).joinedload(Step.artifacts),
+            joinedload(Iteration.code_files),
+        )
+    )
+    return session.scalars(stmt).unique().first()
 
 
 def get_iterations(session: Session, run_id: str) -> Sequence[Iteration]:
@@ -364,6 +403,42 @@ def bulk_insert_events(session: Session, events: list[Event]) -> None:
     session.commit()
 
 
+def delete_incomplete_steps(session: Session, run_id: str) -> int:
+    """Delete step rows that started but never finished (resume cleanup).
+
+    Returns the number of rows deleted.
+    """
+    stmt = select(Step).where(Step.run_id == run_id, Step.finished_at.is_(None))
+    incomplete = session.scalars(stmt).all()
+    count = len(incomplete)
+    for step in incomplete:
+        session.delete(step)
+    if count:
+        session.commit()
+    return count
+
+
+def get_last_completed_step(session: Session, run_id: str) -> Step | None:
+    """Get the last step that has a finished_at timestamp (i.e., completed successfully)."""
+    stmt = (
+        select(Step)
+        .where(Step.run_id == run_id, Step.finished_at.isnot(None))
+        .order_by(Step.iteration_num.desc(), Step.step_num.desc())
+    )
+    return session.scalars(stmt).first()
+
+
+def get_steps_for_run(session: Session, run_id: str) -> Sequence[Step]:
+    """Get all steps for a run, ordered by iteration and step number."""
+    stmt = (
+        select(Step)
+        .where(Step.run_id == run_id)
+        .options(joinedload(Step.artifacts))
+        .order_by(Step.iteration_num, Step.step_num)
+    )
+    return session.scalars(stmt).unique().all()
+
+
 def list_events(
     session: Session,
     run_id: str,
@@ -377,3 +452,160 @@ def list_events(
         stmt = stmt.where(Event.agent_name == agent_name)
     stmt = stmt.order_by(Event.id)
     return session.scalars(stmt).all()
+
+
+# ======================================================================
+# Token usage aggregation
+# ======================================================================
+
+
+def get_run_usage(session: Session, run_id: str) -> dict:
+    """Aggregate token usage for a single run.
+
+    Returns a dict with totals, by_model, by_agent, and by_iteration breakdowns.
+    """
+    steps = (
+        session.execute(
+            select(
+                Step.iteration_num,
+                Step.agent_name,
+                Step.model_used,
+                Step.provider,
+                Step.input_tokens,
+                Step.output_tokens,
+                Step.cache_read_tokens,
+                Step.cache_creation_tokens,
+            )
+            .where(Step.run_id == run_id, Step.finished_at.isnot(None))
+        )
+        .all()
+    )
+
+    totals = {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "total_cache_creation_tokens": 0,
+    }
+    by_model: dict[str, dict] = {}
+    by_agent: dict[str, dict] = {}
+    by_iteration: dict[int, dict] = {}
+
+    for row in steps:
+        it = row.input_tokens or 0
+        ot = row.output_tokens or 0
+        crt = row.cache_read_tokens or 0
+        cct = row.cache_creation_tokens or 0
+
+        totals["total_input_tokens"] += it
+        totals["total_output_tokens"] += ot
+        totals["total_cache_read_tokens"] += crt
+        totals["total_cache_creation_tokens"] += cct
+
+        # by_model
+        model_key = row.model_used or "unknown"
+        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "provider": row.provider})
+        m["steps"] += 1
+        m["input_tokens"] += it
+        m["output_tokens"] += ot
+
+        # by_agent
+        a = by_agent.setdefault(row.agent_name, {"steps": 0, "input_tokens": 0, "output_tokens": 0})
+        a["steps"] += 1
+        a["input_tokens"] += it
+        a["output_tokens"] += ot
+
+        # by_iteration
+        bi = by_iteration.setdefault(row.iteration_num, {"input_tokens": 0, "output_tokens": 0, "step_count": 0})
+        bi["input_tokens"] += it
+        bi["output_tokens"] += ot
+        bi["step_count"] += 1
+
+    return {
+        **totals,
+        "by_model": by_model,
+        "by_agent": by_agent,
+        "by_iteration": [
+            {"iteration_num": k, **v}
+            for k, v in sorted(by_iteration.items())
+        ],
+    }
+
+
+def get_project_usage(session: Session, project_id: str) -> dict:
+    """Aggregate token usage across all runs in a project.
+
+    Returns totals, by_model, and by_pipeline breakdowns.
+    """
+    stmt = (
+        select(
+            Run.pipeline_name,
+            Step.model_used,
+            Step.provider,
+            func.count().label("step_count"),
+            func.coalesce(func.sum(Step.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(Step.output_tokens), 0).label("output_tokens"),
+            func.coalesce(func.sum(Step.cache_read_tokens), 0).label("cache_read_tokens"),
+            func.coalesce(func.sum(Step.cache_creation_tokens), 0).label("cache_creation_tokens"),
+        )
+        .join(Iteration, (Iteration.run_id == Run.run_id))
+        .join(Step, (Step.run_id == Iteration.run_id) & (Step.iteration_num == Iteration.iteration_num))
+        .where(Run.project_id == project_id, Step.finished_at.isnot(None))
+        .group_by(Run.pipeline_name, Step.model_used, Step.provider)
+    )
+    rows = session.execute(stmt).all()
+
+    # Count runs
+    run_count_stmt = (
+        select(func.count())
+        .select_from(Run)
+        .where(Run.project_id == project_id)
+    )
+    total_runs = session.scalar(run_count_stmt) or 0
+
+    totals = {
+        "total_runs": total_runs,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "total_cache_creation_tokens": 0,
+    }
+    by_model: dict[str, dict] = {}
+    by_pipeline: dict[str, dict] = {}
+
+    for row in rows:
+        it = row.input_tokens
+        ot = row.output_tokens
+        crt = row.cache_read_tokens
+        cct = row.cache_creation_tokens
+
+        totals["total_input_tokens"] += it
+        totals["total_output_tokens"] += ot
+        totals["total_cache_read_tokens"] += crt
+        totals["total_cache_creation_tokens"] += cct
+
+        model_key = row.model_used or "unknown"
+        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "provider": row.provider})
+        m["steps"] += row.step_count
+        m["input_tokens"] += it
+        m["output_tokens"] += ot
+
+        p = by_pipeline.setdefault(row.pipeline_name, {"runs": 0, "input_tokens": 0, "output_tokens": 0})
+        p["input_tokens"] += it
+        p["output_tokens"] += ot
+
+    # Count runs per pipeline
+    pipe_run_stmt = (
+        select(Run.pipeline_name, func.count().label("cnt"))
+        .where(Run.project_id == project_id)
+        .group_by(Run.pipeline_name)
+    )
+    for row in session.execute(pipe_run_stmt).all():
+        if row.pipeline_name in by_pipeline:
+            by_pipeline[row.pipeline_name]["runs"] = row.cnt
+
+    return {
+        **totals,
+        "by_model": by_model,
+        "by_pipeline": by_pipeline,
+    }

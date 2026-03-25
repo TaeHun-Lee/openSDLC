@@ -123,9 +123,56 @@ def run_pipeline(
         "pm_decision": "",
     }
 
+    return _execute_pipeline(pipeline_def, initial_state)
+
+
+def resume_pipeline(
+    pipeline_def: PipelineDefinition,
+    restored_state: PipelineState,
+) -> PipelineState:
+    """Resume a previously interrupted pipeline from restored state.
+
+    Completed steps are placed in a thread-local replay queue.  When
+    LangGraph re-executes the graph from the entry point, each node checks
+    the queue: if the front matches, the step result is replayed without an
+    LLM call.  Once the queue is exhausted (or a mismatch is detected),
+    normal execution resumes from that point.
+    """
+    from app.core.executor.generic_agent import set_replay_queue, clear_replay_queue
+
+    # Populate replay queue, then reset state to initial values so the graph
+    # traversal reproduces the same node/routing sequence as the original run.
+    set_replay_queue(restored_state["steps_completed"])
+
+    restored_state["steps_completed"] = []
+    restored_state["latest_artifacts"] = {}
+    restored_state["iteration_count"] = 1
+    restored_state["rework_count"] = 0
+    restored_state["pm_decision"] = ""
+    restored_state["max_iterations"] = pipeline_def.max_iterations
+    restored_state["max_reworks_per_gate"] = pipeline_def.max_reworks_per_gate
+    restored_state["pipeline_status"] = "running"
+
+    try:
+        return _execute_pipeline(pipeline_def, restored_state, is_resume=True)
+    finally:
+        clear_replay_queue()
+
+
+def _execute_pipeline(
+    pipeline_def: PipelineDefinition,
+    initial_state: PipelineState,
+    is_resume: bool = False,
+) -> PipelineState:
+    """Internal: compile and execute a pipeline with the given initial state."""
+    mode_label = "재개(Resume)" if is_resume else "시작"
+
     print("\n" + "=" * 60)
-    print(f"[Pipeline] '{pipeline_def.name}' 시작")
-    print(f"[Pipeline] User Story: {user_story[:100]}...")
+    print(f"[Pipeline] '{pipeline_def.name}' {mode_label}")
+    print(f"[Pipeline] User Story: {initial_state['user_story'][:100]}...")
+    if is_resume:
+        print(f"[Pipeline] Resuming from iteration={initial_state['iteration_count']}, "
+              f"steps_completed={len(initial_state['steps_completed'])}")
     print(f"[Pipeline] Steps: {len(pipeline_def.steps)}, "
           f"Max spiral iterations: {pipeline_def.max_iterations}, "
           f"Max reworks/gate: {pipeline_def.max_reworks_per_gate}")

@@ -15,11 +15,11 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from app.core.config import (
-    ANTHROPIC_API_KEY,
-    GOOGLE_API_KEY,
-    LLM_PROVIDER,
-    MODEL,
-    OPENAI_API_KEY,
+    get_anthropic_api_key,
+    get_google_api_key,
+    get_llm_provider,
+    get_model,
+    get_openai_api_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class LLMResponse:
 def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=get_anthropic_api_key())
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -73,7 +73,7 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
+    client = genai.Client(api_key=get_google_api_key())
 
     cache_key = hashlib.sha256(f"{model}:{system}".encode()).hexdigest()[:16]
     cached_content_name = _google_cache_store.get(cache_key)
@@ -154,7 +154,7 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
 def _call_openai(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
     from openai import OpenAI
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = OpenAI(api_key=get_openai_api_key())
     response = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -229,8 +229,8 @@ def call_llm(
     quality_check: Callable[[LLMResponse], str | None] | None = None,
 ) -> LLMResponse:
     """Call LLM with provider-agnostic interface and automatic retry."""
-    resolved_provider = provider or LLM_PROVIDER
-    resolved_model = model or MODEL
+    resolved_provider = provider or get_llm_provider()
+    resolved_model = model or get_model()
 
     call_fn = _PROVIDERS.get(resolved_provider)
     if call_fn is None:

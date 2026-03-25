@@ -31,6 +31,16 @@ class StartRunRequest(BaseModel):
         None,
         description="Project ID to associate this run with",
     )
+    webhook_url: str | None = Field(
+        None,
+        description="URL to receive POST notification on run completion/failure/cancellation",
+        examples=["https://example.com/hooks/opensdlc"],
+    )
+    webhook_events: list[str] | None = Field(
+        None,
+        description="Event types to notify: completed, failed, cancelled. Defaults to all.",
+        examples=[["completed", "failed"]],
+    )
 
 
 # --- Projects ---

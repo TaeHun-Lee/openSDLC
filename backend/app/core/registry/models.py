@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentPersona(BaseModel):
@@ -17,6 +17,8 @@ class AgentPersona(BaseModel):
 
 class AgentConfig(BaseModel):
     """Parsed agent configuration from *.config.yaml."""
+
+    model_config = ConfigDict(extra="allow")
 
     agent_id: str
     display_name: str
@@ -33,9 +35,6 @@ class AgentConfig(BaseModel):
     reference_templates: list[str] = Field(default_factory=list)
     mandate_files: list[str] = Field(default_factory=list)
     user_message_strategy: str = "input_assembler"
-
-    class Config:
-        extra = "allow"
 
 
 class StepDefinition(BaseModel):

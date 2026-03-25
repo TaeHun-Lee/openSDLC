@@ -187,6 +187,83 @@ class ProgressInfo(BaseModel):
     elapsed_seconds: float | None = None
 
 
+# --- Usage ---
+
+class ModelUsage(BaseModel):
+    steps: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    provider: str | None = None
+
+
+class AgentUsage(BaseModel):
+    steps: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class IterationUsage(BaseModel):
+    iteration_num: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    step_count: int = 0
+
+
+class RunUsage(BaseModel):
+    run_id: str
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+    by_model: dict[str, ModelUsage] = Field(default_factory=dict)
+    by_agent: dict[str, AgentUsage] = Field(default_factory=dict)
+    by_iteration: list[IterationUsage] = Field(default_factory=list)
+
+
+class PipelineUsage(BaseModel):
+    runs: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class ProjectUsage(BaseModel):
+    project_id: str
+    total_runs: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+    by_model: dict[str, ModelUsage] = Field(default_factory=dict)
+    by_pipeline: dict[str, PipelineUsage] = Field(default_factory=dict)
+
+
+# --- Pipeline Validation ---
+
+class ValidationIssue(BaseModel):
+    """A single validation warning or error."""
+    type: str
+    step: int | None = None
+    agent: str | None = None
+    provider: str | None = None
+    message: str
+
+
+class ArtifactFlowStep(BaseModel):
+    """Describes what a pipeline step consumes and produces."""
+    step: int
+    agent: str
+    produces: list[str] = Field(default_factory=list)
+    consumes: list[str] = Field(default_factory=list)
+
+
+class PipelineValidationResult(BaseModel):
+    """Result of a dry-run / pre-flight validation of a pipeline."""
+    valid: bool
+    errors: list[ValidationIssue] = Field(default_factory=list)
+    warnings: list[ValidationIssue] = Field(default_factory=list)
+    artifact_flow: list[ArtifactFlowStep] = Field(default_factory=list)
+
+
 # --- Health ---
 
 class HealthResponse(BaseModel):

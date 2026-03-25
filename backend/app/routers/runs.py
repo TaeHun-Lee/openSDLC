@@ -12,19 +12,24 @@ from fastapi.responses import StreamingResponse
 from app.core.artifacts.code_extractor import extract_code_files, get_runtime_info
 from app.core.artifacts.parser import extract_artifact_id
 from app.db import repository as repo
+from app.db.models import Iteration as IterationModel
 from app.models.requests import StartRunRequest
 from app.models.responses import (
+    AgentUsage,
     ArtifactInfo,
     ArtifactRef,
     CodeFileInfo,
     CodeFileRef,
     EventInfo,
     IterationInfo,
+    IterationUsage,
+    ModelUsage,
     ProgressInfo,
     RunArtifacts,
     RunCreated,
     RunDetail,
     RunSummary,
+    RunUsage,
     StepDetailInfo,
     StepResultInfo,
 )
@@ -41,6 +46,53 @@ def _get_session_factory(request: Request):
     return request.app.state.session_factory
 
 
+def _build_iteration_info(db_iter: IterationModel) -> IterationInfo:
+    """Convert a DB Iteration (with eager-loaded relations) to IterationInfo."""
+    steps_info = [
+        StepDetailInfo(
+            step_num=s.step_num,
+            agent_name=s.agent_name,
+            mode=s.mode,
+            verdict=s.verdict,
+            model_used=s.model_used,
+            provider=s.provider,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+            cache_creation_tokens=s.cache_creation_tokens,
+            rework_seq=s.rework_seq or 0,
+            started_at=s.started_at,
+            finished_at=s.finished_at,
+            artifacts=[
+                ArtifactRef(
+                    artifact_type=a.artifact_type,
+                    artifact_id=a.artifact_id,
+                    file_path=a.file_path,
+                )
+                for a in s.artifacts
+            ],
+        )
+        for s in db_iter.steps
+    ]
+    code_refs = [
+        CodeFileRef(
+            relative_path=cf.relative_path,
+            file_path=cf.file_path,
+            size_bytes=cf.size_bytes,
+        )
+        for cf in db_iter.code_files
+    ]
+    return IterationInfo(
+        iteration_num=db_iter.iteration_num,
+        status=db_iter.status or "running",
+        satisfaction_score=db_iter.satisfaction_score,
+        started_at=db_iter.started_at,
+        finished_at=db_iter.finished_at,
+        steps=steps_info,
+        code_files=code_refs,
+    )
+
+
 # ------------------------------------------------------------------
 # Start run
 # ------------------------------------------------------------------
@@ -54,6 +106,8 @@ async def start_run(body: StartRunRequest, request: Request) -> RunCreated:
         user_story=body.user_story,
         max_iterations=body.max_iterations,
         project_id=body.project_id,
+        webhook_url=body.webhook_url,
+        webhook_events=body.webhook_events,
     )
     return RunCreated(
         run_id=record.run_id,
@@ -104,52 +158,8 @@ def get_run(run_id: str, request: Request) -> RunDetail:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         # Build iteration tree from DB
-        iterations_info: list[IterationInfo] = []
         db_iterations = repo.get_iterations(session, run_id)
-        for db_iter in db_iterations:
-            steps_info = [
-                StepDetailInfo(
-                    step_num=s.step_num,
-                    agent_name=s.agent_name,
-                    mode=s.mode,
-                    verdict=s.verdict,
-                    model_used=s.model_used,
-                    provider=s.provider,
-                    input_tokens=s.input_tokens,
-                    output_tokens=s.output_tokens,
-                    cache_read_tokens=s.cache_read_tokens,
-                    cache_creation_tokens=s.cache_creation_tokens,
-                    rework_seq=s.rework_seq or 0,
-                    started_at=s.started_at,
-                    finished_at=s.finished_at,
-                    artifacts=[
-                        ArtifactRef(
-                            artifact_type=a.artifact_type,
-                            artifact_id=a.artifact_id,
-                            file_path=a.file_path,
-                        )
-                        for a in s.artifacts
-                    ],
-                )
-                for s in db_iter.steps
-            ]
-            code_refs = [
-                CodeFileRef(
-                    relative_path=cf.relative_path,
-                    file_path=cf.file_path,
-                    size_bytes=cf.size_bytes,
-                )
-                for cf in db_iter.code_files
-            ]
-            iterations_info.append(IterationInfo(
-                iteration_num=db_iter.iteration_num,
-                status=db_iter.status or "running",
-                satisfaction_score=db_iter.satisfaction_score,
-                started_at=db_iter.started_at,
-                finished_at=db_iter.finished_at,
-                steps=steps_info,
-                code_files=code_refs,
-            ))
+        iterations_info = [_build_iteration_info(it) for it in db_iterations]
 
         # Legacy flat steps + artifacts from active in-memory state
         flat_steps: list[StepResultInfo] = []
@@ -210,6 +220,10 @@ async def stream_events(
             async for idx, event in active.event_bus.subscribe(last_index=last_event_id):
                 if await request.is_disconnected():
                     break
+                if event is None:
+                    # Heartbeat — send SSE comment to keep connection alive
+                    yield ": heartbeat\n\n"
+                    continue
                 yield event.to_sse(event_id=idx)
 
         return StreamingResponse(
@@ -360,6 +374,112 @@ def get_progress(run_id: str, request: Request) -> ProgressInfo:
 
 
 # ------------------------------------------------------------------
+# Token usage
+# ------------------------------------------------------------------
+
+@router.get("/{run_id}/usage", response_model=RunUsage)
+def get_run_usage(run_id: str, request: Request) -> RunUsage:
+    """Get aggregated token usage for a run, broken down by model, agent, and iteration."""
+    sf = _get_session_factory(request)
+    with sf() as session:
+        db_run = repo.get_run(session, run_id)
+        if db_run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        raw = repo.get_run_usage(session, run_id)
+
+    return RunUsage(
+        run_id=run_id,
+        total_input_tokens=raw["total_input_tokens"],
+        total_output_tokens=raw["total_output_tokens"],
+        total_cache_read_tokens=raw["total_cache_read_tokens"],
+        total_cache_creation_tokens=raw["total_cache_creation_tokens"],
+        by_model={k: ModelUsage(**v) for k, v in raw["by_model"].items()},
+        by_agent={k: AgentUsage(**v) for k, v in raw["by_agent"].items()},
+        by_iteration=[IterationUsage(**v) for v in raw["by_iteration"]],
+    )
+
+
+# ------------------------------------------------------------------
+# Iteration sub-endpoints
+# ------------------------------------------------------------------
+
+@router.get("/{run_id}/iterations/{iteration_num}", response_model=IterationInfo)
+def get_iteration(run_id: str, iteration_num: int, request: Request) -> IterationInfo:
+    """Get a single iteration with its steps, artifacts, and code files."""
+    sf = _get_session_factory(request)
+    with sf() as session:
+        db_run = repo.get_run(session, run_id)
+        if db_run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        db_iter = repo.get_iteration(session, run_id, iteration_num)
+        if db_iter is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Iteration {iteration_num} not found in run '{run_id}'",
+            )
+        return _build_iteration_info(db_iter)
+
+
+@router.get("/{run_id}/iterations/{iteration_num}/steps", response_model=list[StepDetailInfo])
+def get_iteration_steps(run_id: str, iteration_num: int, request: Request) -> list[StepDetailInfo]:
+    """Get the step list for a specific iteration."""
+    sf = _get_session_factory(request)
+    with sf() as session:
+        db_run = repo.get_run(session, run_id)
+        if db_run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        db_iter = repo.get_iteration(session, run_id, iteration_num)
+        if db_iter is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Iteration {iteration_num} not found in run '{run_id}'",
+            )
+        return _build_iteration_info(db_iter).steps
+
+
+@router.get("/{run_id}/iterations/{iteration_num}/artifacts", response_model=RunArtifacts)
+def get_iteration_artifacts(run_id: str, iteration_num: int, request: Request) -> RunArtifacts:
+    """Get artifacts and code files for a specific iteration."""
+    sf = _get_session_factory(request)
+    with sf() as session:
+        db_run = repo.get_run(session, run_id)
+        if db_run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+
+        db_artifacts = repo.list_artifacts(session, run_id, iteration_num=iteration_num)
+        artifact_list: list[ArtifactInfo] = []
+        for a in db_artifacts:
+            fpath = Path(a.file_path)
+            if fpath.is_file():
+                yaml_content = fpath.read_text(encoding="utf-8")
+                artifact_list.append(ArtifactInfo(
+                    artifact_type=a.artifact_type or "",
+                    artifact_id=a.artifact_id,
+                    yaml_content=yaml_content,
+                ))
+
+        db_code_files = repo.list_code_files(session, run_id, iteration_num=iteration_num)
+        code_files_list: list[CodeFileInfo] = []
+        for cf in db_code_files:
+            fpath = Path(cf.file_path)
+            if fpath.is_file():
+                content = fpath.read_text(encoding="utf-8")
+                lang = _guess_language(cf.relative_path)
+                code_files_list.append(CodeFileInfo(
+                    path=cf.relative_path,
+                    language=lang,
+                    content=content,
+                ))
+
+    return RunArtifacts(
+        run_id=run_id,
+        artifacts=artifact_list,
+        code_files=code_files_list,
+        runtime_info={},
+    )
+
+
+# ------------------------------------------------------------------
 # Cancel run
 # ------------------------------------------------------------------
 
@@ -381,6 +501,35 @@ def cancel_run(run_id: str, request: Request) -> dict:
                 detail=f"Run '{run_id}' is not active (status: {db_run.status})",
             )
     return {"run_id": run_id, "message": "Cancellation requested"}
+
+
+# ------------------------------------------------------------------
+# Resume run
+# ------------------------------------------------------------------
+
+@router.post("/{run_id}/resume", response_model=RunCreated, status_code=202)
+async def resume_run(run_id: str, request: Request) -> RunCreated:
+    """Resume a previously failed or cancelled pipeline run.
+
+    Restores state from DB and continues execution from where it stopped.
+    Only runs with status 'failed' or 'cancelled' can be resumed.
+    """
+    manager = _get_run_manager(request)
+    try:
+        record = await manager.resume_run(run_id)
+    except ValueError as exc:
+        sf = _get_session_factory(request)
+        with sf() as session:
+            db_run = repo.get_run(session, run_id)
+        if db_run is None:
+            raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    return RunCreated(
+        run_id=record.run_id,
+        status=record.status.value,
+        pipeline=record.pipeline_name,
+    )
 
 
 def _guess_language(filename: str) -> str:

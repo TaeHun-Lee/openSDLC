@@ -13,6 +13,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -51,12 +52,16 @@ class Run(Base):
     created_at = Column(Float, default=time.time)
     finished_at = Column(Float, nullable=True)
     error = Column(Text, nullable=True)
+    webhook_url = Column(Text, nullable=True)
+    webhook_events = Column(Text, nullable=True)  # JSON list, e.g. '["completed","failed"]'
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id"], ["projects.project_id"],
             ondelete="SET NULL",
         ),
+        Index("ix_runs_project_id", "project_id"),
+        Index("ix_runs_status", "status"),
     )
 
     project = relationship("Project", back_populates="runs")
@@ -197,6 +202,7 @@ class Event(Base):
 
     __table_args__ = (
         ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
+        Index("ix_events_run_id", "run_id"),
     )
 
     run = relationship("Run", back_populates="events")

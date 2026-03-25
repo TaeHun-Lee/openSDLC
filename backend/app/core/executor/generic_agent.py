@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import logging
+import threading
 import time
 from collections.abc import Callable
 
@@ -15,16 +16,27 @@ from app.core.llm_client import call_llm
 from app.core.artifacts.parser import split_narrative_and_yaml, parse_artifact, get_validation_result
 from app.core.reporting.event_parser import parse_reporting_events
 from app.core.pipeline.state import PipelineState, StepResult
-from app.services.print_capture import get_cancel_event
+from app.services.event_bus import EventType, RunEvent
+from app.services.print_capture import get_artifact_saver, get_cancel_event, get_event_emitter
 
 logger = logging.getLogger(__name__)
 
 _BRACKET_PREFIX_RE = re.compile(r"^\[(\w+(?:Agent)?)\]")
+
+# --- PM decision extraction patterns (robust against LLM formatting variations) ---
+
+# Strip markdown code fences, bold markers, and backticks before pattern matching
+_MARKDOWN_NOISE_RE = re.compile(r"```(?:yaml|json|text|markdown)?\s*\n?|```|[`*]")
+
+# Allow flexible separators: "ITERATION_DECISION: continue", "ITERATION_DECISION = done",
+# "ITERATION_DECISION - continue", with optional quotes around the value
 _ITERATION_DECISION_RE = re.compile(
-    r"ITERATION_DECISION:\s*(continue|done)", re.IGNORECASE
+    r"ITERATION[_\s-]*DECISION\s*[:=\-]\s*[\"']?(continue|done)[\"']?",
+    re.IGNORECASE,
 )
 _SATISFACTION_SCORE_RE = re.compile(
-    r"SATISFACTION_SCORE:\s*(\d+)", re.IGNORECASE
+    r"SATISFACTION[_\s-]*SCORE\s*[:=\-]\s*[\"']?(\d+)[\"']?",
+    re.IGNORECASE,
 )
 
 
@@ -64,20 +76,177 @@ def _format_narrative(narrative: str, agent_id: str) -> str:
     return "\n".join(formatted)
 
 
+_MIN_FAILURE_CANDIDATES = 3
+
+
+def enforce_adversarial_mandate(
+    validation_result: str,
+    report_dict: dict | None,
+) -> str:
+    """Enforce adversarial mandate on ValidatorAgent pass verdicts.
+
+    If the validation result is "pass" but fewer than 3 failure_candidates
+    are present, overrides the result to "fail" to trigger a rework.
+
+    Returns the (possibly overridden) validation result.
+    """
+    if validation_result != "pass" or not isinstance(report_dict, dict):
+        return validation_result
+
+    failure_candidates = report_dict.get("failure_candidates", [])
+    if not isinstance(failure_candidates, list):
+        failure_candidates = []
+
+    if len(failure_candidates) < _MIN_FAILURE_CANDIDATES:
+        logger.warning(
+            "[ValidatorAgent] Adversarial mandate violation: pass verdict overridden to FAIL — "
+            "only %d failure_candidates (minimum %d required).",
+            len(failure_candidates),
+            _MIN_FAILURE_CANDIDATES,
+        )
+        return "fail"
+
+    logger.info(
+        "[ValidatorAgent] Adversarial mandate satisfied: %d failure_candidates considered",
+        len(failure_candidates),
+    )
+    return validation_result
+
+
+# ---------------------------------------------------------------------------
+# Event emission helper
+# ---------------------------------------------------------------------------
+
+
+def _emit(event: RunEvent) -> None:
+    """Emit a structured event via the thread-local emitter (if available)."""
+    emitter = get_event_emitter()
+    if emitter is not None:
+        try:
+            emitter(event)
+        except Exception:
+            pass  # never break the pipeline due to emitter failure
+
+
+# ---------------------------------------------------------------------------
+# Resume replay — thread-local queue of already-completed steps
+# ---------------------------------------------------------------------------
+_replay_ctx = threading.local()
+
+
+def set_replay_queue(steps: list[StepResult]) -> None:
+    """Store ordered list of completed steps to replay during resume."""
+    _replay_ctx.queue = list(steps)
+
+
+def clear_replay_queue() -> None:
+    """Discard the replay queue (resume point reached or cleanup)."""
+    _replay_ctx.queue = None
+
+
+def _try_replay(step: StepDefinition, state: PipelineState) -> dict | None:
+    """If the next queued step matches this node, pop and return a state update.
+
+    Returns None when the queue is empty or the front doesn't match,
+    signalling that real LLM execution should proceed.
+    """
+    queue: list[StepResult] | None = getattr(_replay_ctx, "queue", None)
+    if not queue:
+        return None
+
+    next_sr = queue[0]
+    if (
+        next_sr["agent_id"] != step.agent
+        or next_sr.get("step_num") != step.step
+        or next_sr.get("iteration_num") != state["iteration_count"]
+        or next_sr.get("rework_seq", 0) != state["rework_count"]
+    ):
+        return None
+
+    # Match — pop from queue and build state update without LLM call
+    sr = queue.pop(0)
+
+    art_type = sr.get("artifact_type", "")
+    art_yaml = sr.get("artifact_yaml", "")
+
+    new_latest = {**state["latest_artifacts"]}
+    if art_type and art_yaml:
+        new_latest[art_type] = art_yaml
+
+    new_steps = [*state["steps_completed"], sr]
+
+    new_rework = state["rework_count"]
+    if step.agent == "ValidatorAgent":
+        vr = sr.get("validation_result")
+        if vr in ("fail", "warning"):
+            new_rework += 1
+        elif vr == "pass":
+            new_rework = 0
+
+    state_update: dict = {
+        "steps_completed": new_steps,
+        "latest_artifacts": new_latest,
+        "rework_count": new_rework,
+    }
+
+    # PMAgent iteration decision — infer from remaining queue
+    if step.on_next_iteration and step.agent == "PMAgent":
+        current_iter = state["iteration_count"]
+        has_next = any(s.get("iteration_num", 0) > current_iter for s in queue)
+        if has_next:
+            state_update["pm_decision"] = "continue"
+            state_update["iteration_count"] = current_iter + 1
+            state_update["rework_count"] = 0
+        else:
+            state_update["pm_decision"] = "done"
+
+    return state_update
+
+
+def _strip_markdown_noise(text: str) -> str:
+    """Remove markdown code fences, bold markers, and backticks that LLMs may wrap around values."""
+    return _MARKDOWN_NOISE_RE.sub("", text)
+
+
 def _extract_pm_decision(text: str) -> str:
-    """Extract ITERATION_DECISION from PMAgent output. Defaults to 'continue'."""
+    """Extract ITERATION_DECISION from PMAgent output. Defaults to 'continue'.
+
+    Handles common LLM formatting variations:
+    - Markdown code blocks wrapping the value
+    - Extra whitespace or alternative separators (=, -)
+    - Quoted values ("continue", 'done')
+    """
+    # Try raw text first (fastest path)
     m = _ITERATION_DECISION_RE.search(text)
     if m:
         return m.group(1).lower()
+
+    # Retry after stripping markdown noise
+    cleaned = _strip_markdown_noise(text)
+    m = _ITERATION_DECISION_RE.search(cleaned)
+    if m:
+        logger.info("[PMAgent] ITERATION_DECISION found after markdown cleanup: %s", m.group(1))
+        return m.group(1).lower()
+
     logger.warning("[PMAgent] ITERATION_DECISION not found in output — defaulting to 'continue'")
     return "continue"
 
 
 def _extract_satisfaction_score(text: str) -> int:
-    """Extract SATISFACTION_SCORE from PMAgent output. Defaults to 0."""
+    """Extract SATISFACTION_SCORE from PMAgent output. Defaults to 0.
+
+    Handles the same formatting variations as _extract_pm_decision.
+    """
     m = _SATISFACTION_SCORE_RE.search(text)
     if m:
         return int(m.group(1))
+
+    cleaned = _strip_markdown_noise(text)
+    m = _SATISFACTION_SCORE_RE.search(cleaned)
+    if m:
+        logger.info("[PMAgent] SATISFACTION_SCORE found after markdown cleanup: %s", m.group(1))
+        return int(m.group(1))
+
     return 0
 
 
@@ -96,19 +265,43 @@ def create_agent_node(
         if cancel is not None and cancel.is_set():
             raise InterruptedError(f"Run cancelled before step {step.step} ({step.agent})")
 
+        # Resume replay: skip LLM call if this step was already completed
+        replay_update = _try_replay(step, state)
+        if replay_update is not None:
+            logger.info(
+                "[%s] Step %d replayed from resume state (iteration %d, rework %d)",
+                step.agent, step.step, state["iteration_count"], state["rework_count"],
+            )
+            return replay_update
+        # Past the replay point — clear queue so subsequent nodes don't check
+        clear_replay_queue()
+
         resolved_output_type = output_type.replace(
             "{NN}", f"{state['iteration_count']:02d}"
         )
 
         user_message = build_user_message(agent_config, step, state)
 
-        # Emit step_started marker (captured by print_capture → EventBus)
-        mode_suffix = f"({step.mode})" if step.mode else ""
-        print(
-            f"[__STEP_START__] step_num={step.step} agent={step.agent}"
-            f" iteration={state['iteration_count']} output={resolved_output_type}"
-            f" {mode_suffix}".rstrip()
-        )
+        # Determine which artifacts this agent consumes
+        input_artifact_types = [
+            k for k in agent_config.primary_inputs
+            if k in state["latest_artifacts"]
+        ]
+
+        # Emit STEP_STARTED event directly to EventBus
+        _emit(RunEvent(
+            event_type=EventType.STEP_STARTED,
+            data={
+                "step_num": step.step,
+                "agent_id": step.agent,
+                "iteration_num": state["iteration_count"],
+                "rework_seq": state["rework_count"],
+                "input_artifacts": input_artifact_types,
+                "expected_output": resolved_output_type,
+                "mode": step.mode,
+                "message": f"[{step.agent}] Step {step.step} started",
+            },
+        ))
 
         started_at = time.time()
         response = call_llm(
@@ -123,9 +316,20 @@ def create_agent_node(
 
         narrative, artifact_yaml = split_narrative_and_yaml(response.text)
 
+        # Terminal logging + narrative event
         if narrative:
             formatted = _format_narrative(narrative, step.agent)
             print(f"\n{formatted}")
+            _emit(RunEvent(
+                event_type=EventType.AGENT_NARRATIVE,
+                data={
+                    "agent_id": step.agent,
+                    "step_num": step.step,
+                    "iteration_num": state["iteration_count"],
+                    "rework_seq": state["rework_count"],
+                    "message": formatted,
+                },
+            ))
         else:
             print(f"\n[{step.agent}] Step {step.step} ({resolved_output_type})")
 
@@ -150,10 +354,51 @@ def create_agent_node(
                     exc,
                 )
             validation_result = get_validation_result(report_dict, raw_yaml=artifact_yaml)
+
+            # Adversarial mandate enforcement (pass → fail if insufficient failure_candidates)
+            original_result = validation_result
+            validation_result = enforce_adversarial_mandate(validation_result, report_dict)
+            if validation_result != original_result:
+                print(
+                    f"[{step.agent}] Adversarial mandate override: "
+                    f"{original_result.upper()} -> {validation_result.upper()}"
+                )
+
             verdict_symbol = {"pass": "PASS", "warning": "WARNING", "fail": "FAIL"}.get(
                 validation_result, validation_result
             )
-            print(f"[{step.agent}] 판정: {verdict_symbol}")
+            print(f"[{step.agent}] Verdict: {verdict_symbol}")
+
+            # Emit validation result event directly
+            _emit(RunEvent(
+                event_type=EventType.VALIDATION_RESULT,
+                data={
+                    "result": validation_result,
+                    "agent_id": step.agent,
+                    "step_num": step.step,
+                    "iteration_num": state["iteration_count"],
+                    "rework_seq": state["rework_count"],
+                    "message": f"[{step.agent}] Verdict: {verdict_symbol}",
+                },
+            ))
+
+            # Emit rework trigger event when validation fails and rework target exists
+            if validation_result in ("fail", "warning") and step.on_fail:
+                rework_seq = state["rework_count"] + 1
+                _emit(RunEvent(
+                    event_type=EventType.REWORK_TRIGGERED,
+                    data={
+                        "validator_step": step.step,
+                        "rework_target": step.on_fail,
+                        "rework_seq": rework_seq,
+                        "iteration_num": state["iteration_count"],
+                        "validation_result": validation_result,
+                        "message": (
+                            f"[{step.agent}] Rework triggered → {step.on_fail} "
+                            f"(rework #{rework_seq})"
+                        ),
+                    },
+                ))
 
         step_result = StepResult(
             step_id=step_node_id,
@@ -179,26 +424,33 @@ def create_agent_node(
             rework_seq=state["rework_count"],
         )
 
-        # Emit step_completed marker (captured by print_capture → EventBus)
-        import json as _json
-        _step_end_data = {
-            "step_num": step.step,
-            "agent_id": step.agent,
-            "iteration_num": state["iteration_count"],
-            "output_type": resolved_output_type,
-            "model_used": response.model,
-            "provider": response.provider,
-            "input_tokens": response.input_tokens,
-            "output_tokens": response.output_tokens,
-            "cache_read_tokens": response.cache_read_tokens,
-            "cache_creation_tokens": response.cache_creation_tokens,
-            "validation_result": validation_result,
-            "mode": step.mode,
-            "rework_seq": state["rework_count"],
-            "started_at": started_at,
-            "finished_at": finished_at,
-        }
-        print(f"[__STEP_END__] {_json.dumps(_step_end_data)}")
+        # Emit STEP_COMPLETED event directly to EventBus
+        _emit(RunEvent(
+            event_type=EventType.STEP_COMPLETED,
+            data={
+                "step_num": step.step,
+                "agent_id": step.agent,
+                "iteration_num": state["iteration_count"],
+                "output_artifact": resolved_output_type,
+                "model_used": response.model,
+                "provider": response.provider,
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "cache_read_tokens": response.cache_read_tokens,
+                "cache_creation_tokens": response.cache_creation_tokens,
+                "validation_result": validation_result,
+                "mode": step.mode,
+                "rework_seq": state["rework_count"],
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "message": f"[{step.agent}] Step {step.step} completed",
+            },
+        ))
+
+        # Persist artifact to disk immediately (crash-safe)
+        saver = get_artifact_saver()
+        if saver and artifact_yaml:
+            saver(state["iteration_count"], step.agent, resolved_output_type, artifact_yaml)
 
         new_latest = {**state["latest_artifacts"], resolved_output_type: artifact_yaml}
         new_steps = [*state["steps_completed"], step_result]

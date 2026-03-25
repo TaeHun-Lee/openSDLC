@@ -9,7 +9,14 @@ from fastapi.responses import Response
 
 from app.db import repository as repo
 from app.models.requests import CreateProjectRequest, UpdateProjectRequest
-from app.models.responses import ProjectDetail, ProjectInfo, RunSummary
+from app.models.responses import (
+    ModelUsage,
+    PipelineUsage,
+    ProjectDetail,
+    ProjectInfo,
+    ProjectUsage,
+    RunSummary,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -106,6 +113,27 @@ def update_project(project_id: str, body: UpdateProjectRequest, request: Request
             description=proj.description or "",
             created_at=proj.created_at,
             run_count=len(proj.runs),
+        )
+
+
+@router.get("/{project_id}/usage", response_model=ProjectUsage)
+def get_project_usage(project_id: str, request: Request) -> ProjectUsage:
+    """Aggregate token usage across all runs in a project."""
+    sf = _sf(request)
+    with sf() as session:
+        proj = repo.get_project(session, project_id)
+        if proj is None:
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        raw = repo.get_project_usage(session, project_id)
+        return ProjectUsage(
+            project_id=project_id,
+            total_runs=raw["total_runs"],
+            total_input_tokens=raw["total_input_tokens"],
+            total_output_tokens=raw["total_output_tokens"],
+            total_cache_read_tokens=raw["total_cache_read_tokens"],
+            total_cache_creation_tokens=raw["total_cache_creation_tokens"],
+            by_model={k: ModelUsage(**v) for k, v in raw["by_model"].items()},
+            by_pipeline={k: PipelineUsage(**v) for k, v in raw["by_pipeline"].items()},
         )
 
 

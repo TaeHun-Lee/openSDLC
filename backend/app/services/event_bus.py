@@ -21,6 +21,7 @@ class EventType(str, Enum):
     VALIDATION_RESULT = "validation_result"
     AGENT_NARRATIVE = "agent_narrative"
     PIPELINE_COMPLETED = "pipeline_completed"
+    REWORK_TRIGGERED = "rework_triggered"
     PIPELINE_ERROR = "pipeline_error"
     LOG = "log"
 
@@ -81,6 +82,14 @@ class EventBus:
         except RuntimeError:
             pass
 
+    def clear(self) -> None:
+        """Release accumulated events to free memory.
+
+        Should be called after the run is fully persisted to DB and all
+        SSE subscribers have disconnected.
+        """
+        self._events.clear()
+
     @property
     def events(self) -> list[RunEvent]:
         return list(self._events)
@@ -88,11 +97,16 @@ class EventBus:
     def __len__(self) -> int:
         return len(self._events)
 
-    async def subscribe(self, last_index: int = 0) -> AsyncIterator[tuple[int, RunEvent]]:
+    async def subscribe(
+        self, last_index: int = 0, poll_interval: float = 1.5,
+    ) -> AsyncIterator[tuple[int, RunEvent | None]]:
         """Async generator yielding (index, event) tuples.
 
         Yields all events from last_index onward, then waits for new events.
         Terminates when the bus is closed and all events have been yielded.
+
+        On poll_interval timeout with no new events, yields (current_index, None)
+        as a heartbeat signal so callers can perform disconnect detection.
         """
         idx = last_index
         while True:
@@ -105,6 +119,10 @@ class EventBus:
             if self._closed:
                 return
 
-            # Wait for new events
+            # Wait for new events with timeout so callers can check disconnect
             self._notify.clear()
-            await self._notify.wait()
+            try:
+                await asyncio.wait_for(self._notify.wait(), timeout=poll_interval)
+            except asyncio.TimeoutError:
+                # Yield heartbeat (None) so caller can run disconnect check
+                yield idx, None

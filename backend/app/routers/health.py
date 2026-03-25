@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.core.config import LLM_PROVIDER, MODEL
+from app.core.config import get_llm_provider, get_model
 from app.models.responses import HealthResponse
 
 router = APIRouter(tags=["health"])
@@ -14,6 +14,6 @@ router = APIRouter(tags=["health"])
 async def health_check() -> HealthResponse:
     return HealthResponse(
         status="ok",
-        llm_provider=LLM_PROVIDER,
-        model=MODEL,
+        llm_provider=get_llm_provider(),
+        model=get_model(),
     )
