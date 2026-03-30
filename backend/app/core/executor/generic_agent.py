@@ -13,7 +13,13 @@ from app.core.registry.agent_registry import get_agent
 from app.core.prompts.builder import build_system_prompt
 from app.core.prompts.message_strategies import build_user_message
 from app.core.llm_client import call_llm
-from app.core.artifacts.parser import split_narrative_and_yaml, parse_artifact, get_validation_result
+from app.core.artifacts.parser import (
+    split_narrative_and_yaml,
+    parse_artifact,
+    get_validation_result,
+    extract_code_blocks_from_narrative,
+    strip_code_blocks_from_narrative,
+)
 from app.core.reporting.event_parser import parse_reporting_events
 from app.core.pipeline.state import PipelineState, StepResult
 from app.services.event_bus import EventType, RunEvent
@@ -83,12 +89,14 @@ def enforce_adversarial_mandate(
     validation_result: str,
     report_dict: dict | None,
 ) -> str:
-    """Enforce adversarial mandate on ValidatorAgent pass verdicts.
+    """Check adversarial mandate on ValidatorAgent pass verdicts.
 
-    If the validation result is "pass" but fewer than 3 failure_candidates
-    are present, overrides the result to "fail" to trigger a rework.
+    Logs a warning if the validation result is "pass" but fewer than 3
+    failure_candidates are present.  Does NOT override the result — the
+    mandate serves as diagnostic guidance, not a hard gate that blocks
+    the pipeline.
 
-    Returns the (possibly overridden) validation result.
+    Returns the original validation result unchanged.
     """
     if validation_result != "pass" or not isinstance(report_dict, dict):
         return validation_result
@@ -99,17 +107,17 @@ def enforce_adversarial_mandate(
 
     if len(failure_candidates) < _MIN_FAILURE_CANDIDATES:
         logger.warning(
-            "[ValidatorAgent] Adversarial mandate violation: pass verdict overridden to FAIL — "
-            "only %d failure_candidates (minimum %d required).",
+            "[ValidatorAgent] Adversarial mandate note: pass verdict accepted with "
+            "only %d failure_candidates (recommended minimum %d). "
+            "Consider improving the prompt to elicit more thorough analysis.",
             len(failure_candidates),
             _MIN_FAILURE_CANDIDATES,
         )
-        return "fail"
-
-    logger.info(
-        "[ValidatorAgent] Adversarial mandate satisfied: %d failure_candidates considered",
-        len(failure_candidates),
-    )
+    else:
+        logger.info(
+            "[ValidatorAgent] Adversarial mandate satisfied: %d failure_candidates considered",
+            len(failure_candidates),
+        )
     return validation_result
 
 
@@ -316,6 +324,18 @@ def create_agent_node(
 
         narrative, artifact_yaml = split_narrative_and_yaml(response.text)
 
+        # Extract code blocks from narrative (for ImplementationArtifact)
+        code_blocks: list[dict[str, str]] = []
+        if resolved_output_type.startswith("ImplementationArtifact"):
+            code_blocks = extract_code_blocks_from_narrative(narrative)
+            if code_blocks:
+                logger.info(
+                    "[%s] Extracted %d code blocks from narrative",
+                    step.agent, len(code_blocks),
+                )
+            # Strip code blocks from narrative for logging/events
+            narrative = strip_code_blocks_from_narrative(narrative)
+
         # Terminal logging + narrative event
         if narrative:
             formatted = _format_narrative(narrative, step.agent)
@@ -355,14 +375,8 @@ def create_agent_node(
                 )
             validation_result = get_validation_result(report_dict, raw_yaml=artifact_yaml)
 
-            # Adversarial mandate enforcement (pass → fail if insufficient failure_candidates)
-            original_result = validation_result
-            validation_result = enforce_adversarial_mandate(validation_result, report_dict)
-            if validation_result != original_result:
-                print(
-                    f"[{step.agent}] Adversarial mandate override: "
-                    f"{original_result.upper()} -> {validation_result.upper()}"
-                )
+            # Adversarial mandate check (warning only, does not override result)
+            enforce_adversarial_mandate(validation_result, report_dict)
 
             verdict_symbol = {"pass": "PASS", "warning": "WARNING", "fail": "FAIL"}.get(
                 validation_result, validation_result
@@ -450,10 +464,21 @@ def create_agent_node(
         # Persist artifact to disk immediately (crash-safe)
         saver = get_artifact_saver()
         if saver and artifact_yaml:
-            saver(state["iteration_count"], step.agent, resolved_output_type, artifact_yaml)
+            saver(state["iteration_count"], step.agent, resolved_output_type, artifact_yaml, code_blocks)
 
         new_latest = {**state["latest_artifacts"], resolved_output_type: artifact_yaml}
         new_steps = [*state["steps_completed"], step_result]
+
+        # Update code blocks context for downstream agents (PMAgent, TestAgent)
+        new_code_blocks = {**state.get("latest_code_blocks", {})}
+        if code_blocks:
+            code_text_parts = []
+            for block in code_blocks:
+                code_text_parts.append(
+                    f"<!-- FILE: {block['path']} -->\n"
+                    f"```{block['language']}\n{block['content']}\n```"
+                )
+            new_code_blocks[step.agent] = "\n\n".join(code_text_parts)
 
         new_rework = state["rework_count"]
         if step.agent == "ValidatorAgent":
@@ -465,6 +490,7 @@ def create_agent_node(
         state_update: dict = {
             "steps_completed": new_steps,
             "latest_artifacts": new_latest,
+            "latest_code_blocks": new_code_blocks,
             "rework_count": new_rework,
         }
 

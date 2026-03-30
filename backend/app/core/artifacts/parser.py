@@ -1,11 +1,54 @@
 """Parse and extract YAML artifacts from LLM responses."""
 
+from __future__ import annotations
+
 import re
 import logging
 import textwrap
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Code block extraction from narrative (<!-- FILE: path --> markers)
+# ---------------------------------------------------------------------------
+
+_FILE_MARKER_RE = re.compile(
+    r"<!--\s*FILE:\s*(.+?)\s*-->\s*\n"   # <!-- FILE: path -->
+    r"```(\w*)\s*\n"                       # ```language
+    r"(.*?)"                               # content (non-greedy)
+    r"\n```",                              # closing fence
+    re.DOTALL,
+)
+
+_FILE_BLOCK_RE = re.compile(
+    r"<!--\s*FILE:\s*.+?\s*-->\s*\n```\w*\s*\n.*?\n```\s*\n?",
+    re.DOTALL,
+)
+
+
+def extract_code_blocks_from_narrative(narrative: str) -> list[dict[str, str]]:
+    """Extract code file blocks marked with ``<!-- FILE: path -->`` from narrative.
+
+    Returns list of ``{"path": str, "language": str, "content": str}``.
+    """
+    results: list[dict[str, str]] = []
+    for match in _FILE_MARKER_RE.finditer(narrative):
+        file_path = match.group(1).strip().strip("\"'")
+        language = match.group(2).strip()
+        content = match.group(3)
+        if file_path and content:
+            results.append({
+                "path": file_path,
+                "language": language,
+                "content": content,
+            })
+    return results
+
+
+def strip_code_blocks_from_narrative(narrative: str) -> str:
+    """Remove ``<!-- FILE: -->`` code blocks from narrative, leaving other text."""
+    return _FILE_BLOCK_RE.sub("", narrative).strip()
 
 
 def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:

@@ -1,0 +1,170 @@
+artifact_id: "TD-01"
+artifact_type: "TestDesignArtifact"
+iteration: 1
+created_by: "TestAgent"
+created_at: "2023-10-27T10:05:00Z"
+source_artifact_ids:
+  - "UC-01"
+status: "draft"
+summary: "순수 JavaScript와 HTML 달력 애플리케이션의 테스트 설계 (UC-01 기반)"
+instructions_for_next_agent: |
+  TestDesignArtifact를 검증하라.
+  coverage completeness, scenario quality, evidence type 정의를 확인하라.
+  검증 결과는 ValidationReportArtifact로 작성하라.
+
+test_design_scope:
+  use_case_ids:
+    - "UC-01-01"
+    - "UC-01-02"
+    - "UC-01-03"
+
+coverage_plan:
+  acceptance_criteria:
+    - item: "달력 상단에는 현재 '연도'와 '월'이 명확하게 표시되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "달력 그리드는 해당 월의 모든 날짜를 정확한 요일 위치에 표시해야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "이전/다음 달로 이동할 수 있는 컨트롤(버튼)이 화면에 보여야 한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "'이전 월' 버튼 클릭 시, 달력의 연도와 월 표시가 이전 월로 변경되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+    - item: "달력 그리드는 이전 월의 날짜 구성에 맞게 갱신되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+    - item: "1월에서 '이전 월'을 클릭하면, 이전 연도의 12월로 정확하게 이동해야 한다."
+      covered_by_scenarios:
+        - "TS-01-03"
+    - item: "'다음 월' 버튼 클릭 시, 달력의 연도와 월 표시가 다음 월로 변경되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+    - item: "달력 그리드는 다음 월의 날짜 구성에 맞게 갱신되어야 한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+    - item: "12월에서 '다음 월'을 클릭하면, 다음 연도의 1월로 정확하게 이동해야 한다."
+      covered_by_scenarios:
+        - "TS-01-05"
+  main_flow_steps:
+    - item: "사용자가 애플리케이션 페이지에 접속한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "시스템은 현재 날짜(연도, 월)를 기준으로 달력을 생성한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "시스템은 생성된 달력을 화면에 표시한다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "사용자가 '이전 월' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "시스템은 현재 표시된 월을 기준으로 이전 월을 계산한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "시스템은 계산된 이전 월의 달력으로 화면을 갱신한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "사용자가 '다음 월' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+        - "TS-01-05"
+    - item: "시스템은 현재 표시된 월을 기준으로 다음 월을 계산한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+        - "TS-01-05"
+    - item: "시스템은 계산된 다음 월의 달력으로 화면을 갱신한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+        - "TS-01-05"
+  preconditions:
+    - item: "사용자가 애플리케이션의 HTML 페이지를 로드했다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "화면에 특정 월의 달력이 표시되어 있다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+        - "TS-01-04"
+        - "TS-01-05"
+  triggers:
+    - item: "애플리케이션 페이지 로딩 완료"
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "사용자가 '이전 월' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "사용자가 '다음 월' 버튼을 클릭한다."
+      covered_by_scenarios:
+        - "TS-01-04"
+        - "TS-01-05"
+  observable_outcomes:
+    - item: "현재 월에 해당하는 달력이 화면에 표시된다."
+      covered_by_scenarios:
+        - "TS-01-01"
+    - item: "달력 뷰가 이전 월의 그리드로 갱신된다."
+      covered_by_scenarios:
+        - "TS-01-02"
+        - "TS-01-03"
+    - item: "달력 뷰가 다음 월의 그리드로 갱신된다."
+      covered_by_scenarios:
+        - "TS-01-04"
+        - "TS-01-05"
+
+test_scenarios:
+  - scenario_id: "TS-01-01"
+    related_use_case_id: "UC-01-01"
+    purpose: "애플리케이션 로드 시 현재 월 달력이 올바르게 표시되는지 확인"
+    setup: "웹 브라우저에서 `index.html` 파일을 연다."
+    action: "페이지 로딩이 완료된 후 화면에 표시된 달력을 확인한다."
+    expected_result: "달력 상단에 현재 연도와 월이 정확히 표시되고, 달력 그리드에 현재 월의 날짜와 요일이 올바르게 정렬되어 나타나며, 이전/다음 월 이동 버튼이 존재한다."
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-02"
+    related_use_case_id: "UC-01-02"
+    purpose: "일반적인 경우 '이전 월' 버튼 클릭 시 달력이 이전 월로 정확하게 이동하는지 확인"
+    setup: "현재 월 달력이 표시된 상태에서 시작한다."
+    action: "'이전 월' 버튼을 클릭한다."
+    expected_result: "달력 상단의 연도와 월이 이전 월로 변경되고, 달력 그리드도 이전 월의 날짜 구성에 맞게 갱신된다. (예: 10월 -> 9월)"
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-03"
+    related_use_case_id: "UC-01-02"
+    purpose: "1월에서 '이전 월' 버튼 클릭 시 이전 연도의 12월로 정확하게 이동하는지 경계값 조건 확인"
+    setup: "현재 달력을 조작하여 1월이 표시되도록 설정한다."
+    action: "'이전 월' 버튼을 클릭한다."
+    expected_result: "달력 상단의 연도와 월이 이전 연도의 12월로 변경되고, 달력 그리드도 12월의 날짜 구성에 맞게 갱신된다. (예: 2023년 1월 -> 2022년 12월)"
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-04"
+    related_use_case_id: "UC-01-03"
+    purpose: "일반적인 경우 '다음 월' 버튼 클릭 시 달력이 다음 월로 정확하게 이동하는지 확인"
+    setup: "현재 월 달력이 표시된 상태에서 시작한다."
+    action: "'다음 월' 버튼을 클릭한다."
+    expected_result: "달력 상단의 연도와 월이 다음 월로 변경되고, 달력 그리드도 다음 월의 날짜 구성에 맞게 갱신된다. (예: 10월 -> 11월)"
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+  - scenario_id: "TS-01-05"
+    related_use_case_id: "UC-01-03"
+    purpose: "12월에서 '다음 월' 버튼 클릭 시 다음 연도의 1월로 정확하게 이동하는지 경계값 조건 확인"
+    setup: "현재 달력을 조작하여 12월이 표시되도록 설정한다."
+    action: "'다음 월' 버튼을 클릭한다."
+    expected_result: "달력 상단의 연도와 월이 다음 연도의 1월로 변경되고, 달력 그리드도 1월의 날짜 구성에 맞게 갱신된다. (예: 2023년 12월 -> 2024년 1월)"
+    evidence_type: "runtime"
+    runtime_evidence_required: true
+    code_only_verification_allowed: false
+
+coverage_summary:
+  uncovered_items: []
+  design_notes:
+    - "날짜 계산 로직의 정확성 (윤년, 각 월의 마지막 날짜 등)은 각 월 이동 시나리오 (TS-01-02, TS-01-03, TS-01-04, TS-01-05)에서 달력 그리드가 올바르게 갱신되는지 확인하는 것으로 간접적으로 검증한다."
+    - "UI 렌더링은 모든 'runtime' evidence_type 시나리오에서 육안 확인이 필요하다."

@@ -1,0 +1,128 @@
+artifact_id: "TD-01-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-10-27T10:05:00Z"
+source_artifact_ids:
+  - "TD-01"
+status: "approved"
+summary: "TestDesignArtifact `TD-01`은 스키마를 준수하며, 모든 요구사항에 대한 커버리지 계획과 실행 가능한 테스트 시나리오를 적절하게 정의했습니다. 다음 단계로 진행을 승인합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "TD-01"
+validated_artifact_type: "TestDesignArtifact"
+validated_stage: "TEST-DESIGN"
+validation_attempt: 1
+validation_result: "pass"
+
+checks:
+  - check_name: "schema"
+    result: "pass"
+    evidence: "TestDesignArtifact `TD-01`은 `TestDesignArtifact.yaml` 스키마를 완벽하게 준수합니다. 모든 필수 필드가 존재하고 올바른 형식으로 작성되었습니다."
+  - check_name: "traceability"
+    result: "pass"
+    evidence: "`source_artifact_ids`가 `UC-01`을 정확히 참조하고 있으며, `test_scenarios` 내의 `related_use_case_id` 필드도 `UC-01-01`, `UC-01-02`, `UC-01-03`과 같이 하위 Use Case를 명확히 추적합니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "TestAgent는 테스트 설계 역할에만 집중했으며, 구현 코드 작성이나 사용자에게 직접적인 의사 결정을 요구하는 월권을 행사하지 않았습니다."
+  - check_name: "acceptance_criteria_coverage"
+    result: "pass"
+    evidence: "`coverage_plan.acceptance_criteria`에 명시된 모든 항목이 최소 하나 이상의 테스트 시나리오(`covered_by_scenarios`)에 의해 커버되고 있습니다."
+  - check_name: "main_flow_coverage"
+    result: "pass"
+    evidence: "`coverage_plan.main_flow_steps`에 명시된 모든 주요 흐름 단계가 테스트 시나리오에 의해 커버되고 있습니다."
+  - check_name: "precondition_coverage"
+    result: "pass"
+    evidence: "`coverage_plan.preconditions`에 명시된 모든 전제 조건이 테스트 시나리오에 의해 커버되고 있습니다."
+  - check_name: "trigger_coverage"
+    result: "pass"
+    evidence: "`coverage_plan.triggers`에 명시된 모든 트리거가 테스트 시나리오에 의해 커버되고 있습니다."
+  - check_name: "observable_outcome_coverage"
+    result: "pass"
+    evidence: "`coverage_plan.observable_outcomes`에 명시된 모든 관찰 가능한 결과가 테스트 시나리오에 의해 커버되고 있습니다."
+  - check_name: "scenario_quality"
+    result: "pass"
+    evidence: "각 테스트 시나리오(`test_scenarios`)는 `purpose`, `setup`, `action`, `expected_result`가 명확하고 구체적으로 정의되어 있습니다. 경계값 조건(1월->12월, 12월->1월)도 적절히 포함하여 시나리오의 품질이 높습니다."
+  - check_name: "evidence_type_definition"
+    result: "pass"
+    evidence: "모든 시나리오에서 `evidence_type: \"runtime\"`, `runtime_evidence_required: true`, `code_only_verification_allowed: false`가 일관되게 정의되어 있으며, 이는 UI 중심의 달력 애플리케이션 테스트에 적합합니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations: []
+
+warnings: []
+
+next_action:
+  action: "proceed"
+  target_agent: "CodeAgent"
+  reason: "TestDesignArtifact `TD-01`이 모든 유효성 검사를 통과하여 구현 단계로 진행할 수 있습니다."
+
+blocking_reason: ""
+rework_target_artifact_id: ""
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

@@ -7,7 +7,7 @@ interface SSEState {
   currentAgent: string | null
   stepsTotal: number | null
   error: string | null
-  lastEventId: number
+  lastEventId: number | null
   setStatus: (status: SSEState["status"]) => void
   setCurrentStep: (step: number, agent: string) => void
   setCurrentIteration: (iteration: number) => void
@@ -24,7 +24,7 @@ const initialState = {
   currentAgent: null,
   stepsTotal: null,
   error: null,
-  lastEventId: 0,
+  lastEventId: null,
 }
 
 export const useSSEStore = create<SSEState>()((set) => ({

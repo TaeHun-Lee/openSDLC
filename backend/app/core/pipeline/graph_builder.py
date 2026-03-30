@@ -121,6 +121,7 @@ def run_pipeline(
         "max_reworks_per_gate": pipeline_def.max_reworks_per_gate,
         "pipeline_status": "running",
         "pm_decision": "",
+        "latest_code_blocks": {},
     }
 
     return _execute_pipeline(pipeline_def, initial_state)
@@ -149,6 +150,7 @@ def resume_pipeline(
     restored_state["iteration_count"] = 1
     restored_state["rework_count"] = 0
     restored_state["pm_decision"] = ""
+    restored_state["latest_code_blocks"] = {}
     restored_state["max_iterations"] = pipeline_def.max_iterations
     restored_state["max_reworks_per_gate"] = pipeline_def.max_reworks_per_gate
     restored_state["pipeline_status"] = "running"

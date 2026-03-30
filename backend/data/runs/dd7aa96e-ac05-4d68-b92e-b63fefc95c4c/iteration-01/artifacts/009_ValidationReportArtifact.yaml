@@ -1,0 +1,118 @@
+artifact_id: "N/A-VAL-1"
+artifact_type: "ValidationReportArtifact"
+iteration: 0
+created_by: "ValidatorAgent"
+created_at: "2024-05-21T11:00:01Z"
+source_artifact_ids:
+  - "N/A"
+status: "feedback-required"
+summary: "입력된 내용은 유효한 ImplementationArtifact가 아니며, 단순한 자연어 문장에 불과하여 검증을 진행할 수 없습니다. 아티팩트는 반드시 정의된 YAML 스키마를 준수해야 합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "N/A"
+validated_artifact_type: "ImplementationArtifact"
+validated_stage: "IMPL"
+validation_attempt: 1
+validation_result: "fail"
+
+checks:
+  - check_name: "schema"
+    result: "fail"
+    evidence: "제공된 입력은 YAML 형식의 아티팩트가 아니며, 모든 필수 필드(artifact_id, source_artifact_ids, files_changed, traceability 등)가 누락되었습니다."
+  - check_name: "traceability"
+    result: "fail"
+    evidence: "상위 아티팩트(UseCaseModelArtifact, TestDesignArtifact)에 대한 추적성 정보가 전혀 존재하지 않습니다."
+  - check_name: "evidence_quality"
+    result: "fail"
+    evidence: "구현 내용을 입증할 수 있는 구조화된 증거(파일 경로, 라인 번호 등)가 없습니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "역할 경계 침해는 확인되지 않았습니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations:
+  - rule: "Schema Compliance"
+    severity: "high"
+    description: "제공된 입력은 YAML 형식의 아티팩트가 아니며, 모든 필수 필드가 누락되었습니다."
+    recommended_action: "CodeAgent는 'ImplementationArtifact.yaml' 템플릿에 따라 유효한 아티팩트를 다시 생성해야 합니다."
+  - rule: "Traceability"
+    severity: "high"
+    description: "상위 아티팩트와의 추적성 연결(`source_artifact_ids`)이 없습니다. 이는 후속 테스트 및 검증을 불가능하게 합니다."
+    recommended_action: "아티팩트 생성 시 'UC-...'와 'TD-...' 아티팩트 ID를 `source_artifact_ids` 필드에 명시해야 합니다."
+
+warnings: []
+
+next_action:
+  action: "rework"
+  target_agent: "CodeAgent"
+  reason: "제출된 산출물이 ImplementationArtifact의 스키마를 준수하지 않아 검증을 진행할 수 없습니다. CodeAgent는 템플릿에 맞춰 아티팩트를 재생성해야 합니다."
+
+blocking_reason: "Artifact schema violation. The input is not a valid YAML artifact."
+rework_target_artifact_id: "N/A"
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

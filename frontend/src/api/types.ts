@@ -9,6 +9,7 @@ export interface StepInfo {
   model: string | null
   provider: string | null
   on_fail: string | null
+  on_next_iteration: string | null
   mode: string | null
 }
 
@@ -165,18 +166,7 @@ export interface EventInfo {
   message: string | null
   iteration_num: number | null
   created_at: number
-}
-
-// --- Progress ---
-
-export interface ProgressInfo {
-  run_id: string
-  status: string
-  current_iteration: number | null
-  current_step: number | null
-  current_agent: string | null
-  steps_total: number | null
-  elapsed_seconds: number | null
+  data?: Record<string, unknown> | null
 }
 
 // --- Usage ---

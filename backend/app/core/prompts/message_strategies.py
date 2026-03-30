@@ -80,11 +80,16 @@ def _strategy_test_agent(
             "아래 UseCaseModelArtifact를 기반으로 TestDesignArtifact를 작성하라.\n\n"
             f"UseCaseModelArtifact:\n{latest.get('UseCaseModelArtifact', '')}"
         )
-    return (
-        "아래 artifacts를 기반으로 TestReportArtifact를 작성하라.\n\n"
-        f"TestDesignArtifact:\n{latest.get('TestDesignArtifact', '')}\n\n"
-        f"ImplementationArtifact:\n{latest.get('ImplementationArtifact', '')}"
-    )
+    parts = [
+        "아래 artifacts를 기반으로 TestReportArtifact를 작성하라.\n",
+        f"TestDesignArtifact:\n{latest.get('TestDesignArtifact', '')}\n",
+        f"ImplementationArtifact:\n{latest.get('ImplementationArtifact', '')}\n",
+    ]
+    # Inject source code context from narrative code blocks
+    code_context = state.get("latest_code_blocks", {}).get("CodeAgent", "")
+    if code_context:
+        parts.append(f"--- 구현 소스코드 ---\n{code_context}\n")
+    return "\n".join(parts)
 
 
 def _strategy_pm_initializer(
@@ -109,7 +114,9 @@ def _strategy_pm_initializer(
         "- ITERATION_DECISION 판정을 내리지 마라.\n"
         "- 코드를 생성하거나 구현하지 마라.\n"
         "- 테스트를 설계하거나 실행하지 마라.\n"
-        "- 사용자 승인을 요청하지 마라. 자율적으로 판단하고 진행하라.\n\n"
+        "- 절대로 사용자에게 질문하거나 확인/승인을 요청하지 마라. "
+        "이 파이프라인은 완전 자동화되어 있으며, 사용자 입력을 받을 수 없다. "
+        "프로젝트 이름, 폴더 구조, 기술 선택 등 모든 결정을 자율적으로 내려라.\n\n"
         f"User Story:\n{state['user_story']}"
     )
 
@@ -152,9 +159,14 @@ def _strategy_pm_assessor(
         if atype not in artifact_order and content:
             parts.append(f"--- {atype} ---\n{content}\n")
 
+    # Inject source code context from narrative code blocks
+    code_context = state.get("latest_code_blocks", {}).get("CodeAgent", "")
+    if code_context:
+        parts.append(f"--- 구현 소스코드 ---\n{code_context}\n")
+
     parts.append(
         "\n=== 판정 지침 ===\n"
-        "위 ImplementationArtifact의 code_files 내 실제 코드를 직접 분석하라.\n"
+        "위 '구현 소스코드' 섹션의 실제 코드를 직접 분석하라.\n"
         "다음 기준으로 구현 완성도를 평가하라:\n"
         "1. User Story의 모든 요구사항이 코드에 구현되어 있는가?\n"
         "2. UseCaseModelArtifact의 각 use case가 코드에 반영되어 있는가?\n"

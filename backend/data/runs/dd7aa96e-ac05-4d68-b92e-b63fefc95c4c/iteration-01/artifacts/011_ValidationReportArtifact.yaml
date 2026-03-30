@@ -1,0 +1,114 @@
+artifact_id: "IMPL-UNKNOWN-01-VAL-01"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-10-27T10:10:10Z"
+source_artifact_ids:
+  - "IMPL-UNKNOWN-01"
+status: "feedback-required"
+summary: "제공된 입력은 유효한 ImplementationArtifact가 아닙니다. 아티팩트의 YAML 본문이 누락되어 검증을 진행할 수 없습니다. CodeAgent는 템플릿 스키마에 따라 완전한 아티팩트를 다시 제출해야 합니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "IMPL-UNKNOWN-01"
+validated_artifact_type: "ImplementationArtifact"
+validated_stage: "IMPL"
+validation_attempt: 1
+validation_result: "fail"
+
+checks:
+  - check_name: "schema"
+    result: "fail"
+    evidence: "제공된 입력은 YAML 아티팩트가 아니며, 필수 필드(artifact_id, source_artifact_ids, files_changed 등)가 모두 누락되었습니다."
+  - check_name: "traceability"
+    result: "fail"
+    evidence: "source_artifact_ids 필드가 존재하지 않아 상위 UseCaseModelArtifact 및 TestDesignArtifact와의 추적성을 확인할 수 없습니다."
+  - check_name: "evidence"
+    result: "fail"
+    evidence: "files_changed, runtime_info 등 구현의 물리적 증거를 제공하는 필드가 전혀 존재하지 않습니다."
+  - check_name: "role_boundary"
+    result: "pass"
+    evidence: "아티팩트 내용이 없어 역할 경계 위반 여부를 판단할 수 없으나, 제공된 텍스트 자체는 역할 경계를 침범하지 않았습니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations:
+  - rule: "Artifact-Driven Execution (스키마 절대 준수 원칙)"
+    severity: "high"
+    description: "검증 대상인 ImplementationArtifact의 YAML 본문이 제공되지 않았습니다. CodeAgent의 자연어 보고만으로는 검증을 수행할 수 없습니다. OpenSDLC 시스템은 구조화된 아티팩트 기반으로 작동해야 합니다."
+    recommended_action: "CodeAgent는 ImplementationArtifact.yaml 템플릿에 따라 완전한 YAML 형식의 아티팩트를 생성하여 다시 제출해야 합니다."
+
+warnings: []
+
+next_action:
+  action: "rework"
+  target_agent: "CodeAgent"
+  reason: "validation_result가 'fail'입니다. 유효한 아티팩트가 제출되지 않았으므로, CodeAgent가 아티팩트를 다시 생성해야 합니다."
+
+blocking_reason: "검증 대상 아티팩트가 존재하지 않거나 스키마를 준수하지 않아 다운스트림 에이전트(TestAgent)가 작업을 수행할 수 없습니다."
+rework_target_artifact_id: "IMPL-UNKNOWN-01"
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

@@ -7,10 +7,11 @@ Callers use `with session_factory() as session:` blocks.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Sequence
 
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import (
     Artifact,
@@ -127,6 +128,18 @@ def list_runs(
     return session.scalars(stmt).all()
 
 
+def count_steps_by_run(session: Session, run_ids: list[str]) -> dict[str, int]:
+    """Count completed steps per run_id."""
+    if not run_ids:
+        return {}
+    stmt = (
+        select(Step.run_id, func.count().label("cnt"))
+        .where(Step.run_id.in_(run_ids), Step.finished_at.isnot(None))
+        .group_by(Step.run_id)
+    )
+    return {row.run_id: row.cnt for row in session.execute(stmt).all()}
+
+
 def cleanup_zombie_runs(session: Session) -> int:
     """Mark any 'pending' or 'running' runs as 'failed' (server crash recovery).
 
@@ -195,11 +208,11 @@ def get_iteration(
         select(Iteration)
         .where(Iteration.run_id == run_id, Iteration.iteration_num == iteration_num)
         .options(
-            joinedload(Iteration.steps).joinedload(Step.artifacts),
-            joinedload(Iteration.code_files),
+            selectinload(Iteration.steps).selectinload(Step.artifacts),
+            selectinload(Iteration.code_files),
         )
     )
-    return session.scalars(stmt).unique().first()
+    return session.scalars(stmt).first()
 
 
 def get_iterations(session: Session, run_id: str) -> Sequence[Iteration]:
@@ -208,12 +221,12 @@ def get_iterations(session: Session, run_id: str) -> Sequence[Iteration]:
         select(Iteration)
         .where(Iteration.run_id == run_id)
         .options(
-            joinedload(Iteration.steps).joinedload(Step.artifacts),
-            joinedload(Iteration.code_files),
+            selectinload(Iteration.steps).selectinload(Step.artifacts),
+            selectinload(Iteration.code_files),
         )
         .order_by(Iteration.iteration_num)
     )
-    return session.scalars(stmt).unique().all()
+    return session.scalars(stmt).all()
 
 
 def update_iteration(
@@ -406,13 +419,29 @@ def bulk_insert_events(session: Session, events: list[Event]) -> None:
 def delete_incomplete_steps(session: Session, run_id: str) -> int:
     """Delete step rows that started but never finished (resume cleanup).
 
-    Returns the number of rows deleted.
+    Also removes associated artifact files from disk to prevent orphans.
+    Returns the number of step rows deleted.
     """
-    stmt = select(Step).where(Step.run_id == run_id, Step.finished_at.is_(None))
+    stmt = (
+        select(Step)
+        .where(Step.run_id == run_id, Step.finished_at.is_(None))
+        .options(selectinload(Step.artifacts))
+    )
     incomplete = session.scalars(stmt).all()
     count = len(incomplete)
+
+    # Collect and remove orphan artifact files from disk
     for step in incomplete:
+        for art in step.artifacts:
+            if art.file_path:
+                fpath = Path(art.file_path)
+                if fpath.is_file():
+                    try:
+                        fpath.unlink()
+                    except OSError:
+                        pass  # best-effort cleanup
         session.delete(step)
+
     if count:
         session.commit()
     return count
@@ -433,10 +462,10 @@ def get_steps_for_run(session: Session, run_id: str) -> Sequence[Step]:
     stmt = (
         select(Step)
         .where(Step.run_id == run_id)
-        .options(joinedload(Step.artifacts))
+        .options(selectinload(Step.artifacts))
         .order_by(Step.iteration_num, Step.step_num)
     )
-    return session.scalars(stmt).unique().all()
+    return session.scalars(stmt).all()
 
 
 def list_events(
@@ -504,21 +533,27 @@ def get_run_usage(session: Session, run_id: str) -> dict:
 
         # by_model
         model_key = row.model_used or "unknown"
-        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "provider": row.provider})
+        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0, "provider": row.provider})
         m["steps"] += 1
         m["input_tokens"] += it
         m["output_tokens"] += ot
+        m["cache_read_tokens"] += crt
+        m["cache_creation_tokens"] += cct
 
         # by_agent
-        a = by_agent.setdefault(row.agent_name, {"steps": 0, "input_tokens": 0, "output_tokens": 0})
+        a = by_agent.setdefault(row.agent_name, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0})
         a["steps"] += 1
         a["input_tokens"] += it
         a["output_tokens"] += ot
+        a["cache_read_tokens"] += crt
+        a["cache_creation_tokens"] += cct
 
         # by_iteration
-        bi = by_iteration.setdefault(row.iteration_num, {"input_tokens": 0, "output_tokens": 0, "step_count": 0})
+        bi = by_iteration.setdefault(row.iteration_num, {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0, "step_count": 0})
         bi["input_tokens"] += it
         bi["output_tokens"] += ot
+        bi["cache_read_tokens"] += crt
+        bi["cache_creation_tokens"] += cct
         bi["step_count"] += 1
 
     return {
@@ -585,14 +620,18 @@ def get_project_usage(session: Session, project_id: str) -> dict:
         totals["total_cache_creation_tokens"] += cct
 
         model_key = row.model_used or "unknown"
-        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "provider": row.provider})
+        m = by_model.setdefault(model_key, {"steps": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0, "provider": row.provider})
         m["steps"] += row.step_count
         m["input_tokens"] += it
         m["output_tokens"] += ot
+        m["cache_read_tokens"] += crt
+        m["cache_creation_tokens"] += cct
 
-        p = by_pipeline.setdefault(row.pipeline_name, {"runs": 0, "input_tokens": 0, "output_tokens": 0})
+        p = by_pipeline.setdefault(row.pipeline_name, {"runs": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0})
         p["input_tokens"] += it
         p["output_tokens"] += ot
+        p["cache_read_tokens"] += crt
+        p["cache_creation_tokens"] += cct
 
     # Count runs per pipeline
     pipe_run_stmt = (

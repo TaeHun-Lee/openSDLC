@@ -23,6 +23,7 @@ class EventType(str, Enum):
     PIPELINE_COMPLETED = "pipeline_completed"
     REWORK_TRIGGERED = "rework_triggered"
     PIPELINE_ERROR = "pipeline_error"
+    PIPELINE_WARNING = "pipeline_warning"
     LOG = "log"
 
 
@@ -35,6 +36,7 @@ class RunEvent:
     def to_sse(self, event_id: int) -> str:
         """Format as SSE text block."""
         payload = {
+            "id": event_id,
             "event_type": self.event_type.value,
             "data": self.data,
             "timestamp": self.timestamp,

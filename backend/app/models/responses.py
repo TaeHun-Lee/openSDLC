@@ -13,6 +13,7 @@ class StepInfo(BaseModel):
     model: str | None = None
     provider: str | None = None
     on_fail: str | None = None
+    on_next_iteration: str | None = None
     mode: str | None = None
 
 
@@ -193,6 +194,8 @@ class ModelUsage(BaseModel):
     steps: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     provider: str | None = None
 
 
@@ -200,12 +203,16 @@ class AgentUsage(BaseModel):
     steps: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 class IterationUsage(BaseModel):
     iteration_num: int
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     step_count: int = 0
 
 
@@ -224,6 +231,8 @@ class PipelineUsage(BaseModel):
     runs: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 class ProjectUsage(BaseModel):

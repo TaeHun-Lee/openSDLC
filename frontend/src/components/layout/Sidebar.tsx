@@ -9,6 +9,7 @@ import {
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useProjects } from "@/api/queries/projects"
 
 const navItems = [
@@ -18,11 +19,19 @@ const navItems = [
   { to: "/settings", icon: Settings, label: "Settings" },
 ]
 
-export function Sidebar() {
+interface SidebarContentProps {
+  onNavigate?: () => void
+}
+
+export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const { data: projects } = useProjects()
 
+  const handleClick = () => {
+    onNavigate?.()
+  }
+
   return (
-    <aside className="flex h-full w-60 flex-col border-r bg-sidebar-background">
+    <>
       <div className="flex h-14 items-center px-4 font-semibold text-sidebar-foreground">
         OpenSDLC
       </div>
@@ -34,6 +43,7 @@ export function Sidebar() {
               key={to}
               to={to}
               end={to === "/"}
+              onClick={handleClick}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
@@ -57,26 +67,39 @@ export function Sidebar() {
             </div>
             <nav className="flex flex-col gap-1">
               {projects.map((project) => (
-                <NavLink
-                  key={project.project_id}
-                  to={`/projects/${project.project_id}`}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                      isActive
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/50",
-                    )
-                  }
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  <span className="truncate">{project.name}</span>
-                </NavLink>
+                <Tooltip key={project.project_id}>
+                  <TooltipTrigger asChild>
+                    <NavLink
+                      to={`/projects/${project.project_id}`}
+                      onClick={handleClick}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                          isActive
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent/50",
+                        )
+                      }
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{project.name}</span>
+                    </NavLink>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{project.name}</TooltipContent>
+                </Tooltip>
               ))}
             </nav>
           </>
         )}
       </ScrollArea>
+    </>
+  )
+}
+
+export function Sidebar() {
+  return (
+    <aside className="hidden md:flex h-full w-60 flex-col border-r bg-sidebar-background">
+      <SidebarContent />
     </aside>
   )
 }

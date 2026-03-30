@@ -18,8 +18,9 @@ from app.services.event_bus import RunEvent
 
 _thread_local = threading.local()
 
-# Type alias for the event emitter callback
+# Type aliases for callbacks
 EventEmitter = Callable[[RunEvent], None]
+ArtifactSaver = Callable[[int, str, str, str, list[dict[str, str]]], None]
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ from contextlib import contextmanager  # noqa: E402
 def capture_prints(
     event_emitter: EventEmitter,
     cancel_event: threading.Event | None = None,
-    artifact_saver: Callable[[int, str, str, str], None] | None = None,
+    artifact_saver: ArtifactSaver | None = None,
 ):
     """Set up thread-local pipeline context for the duration of a run.
 
@@ -68,9 +69,9 @@ def get_cancel_event() -> threading.Event | None:
     return getattr(_thread_local, "cancel_event", None)
 
 
-def get_artifact_saver() -> Callable[[int, str, str, str], None] | None:
+def get_artifact_saver() -> ArtifactSaver | None:
     """Get the artifact saver callback for the current thread (if any).
 
-    Signature: (iteration_num, agent_id, artifact_type, artifact_yaml) -> None
+    Signature: (iteration_num, agent_id, artifact_type, artifact_yaml, code_blocks) -> None
     """
     return getattr(_thread_local, "artifact_saver", None)

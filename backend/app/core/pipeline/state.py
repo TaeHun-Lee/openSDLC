@@ -60,3 +60,4 @@ class PipelineState(TypedDict):
     max_reworks_per_gate: int
     pipeline_status: str
     pm_decision: str                        # PMAgent iteration decision: "continue" | "done" | ""
+    latest_code_blocks: dict[str, str]      # agent_id → code block text (<!-- FILE: --> markers)

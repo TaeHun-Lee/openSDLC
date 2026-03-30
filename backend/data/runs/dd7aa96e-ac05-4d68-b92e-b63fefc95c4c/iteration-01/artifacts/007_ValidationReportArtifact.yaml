@@ -1,0 +1,111 @@
+artifact_id: "IMPL-UNKNOWN-01-VAL-01"
+artifact_type: "ValidationReportArtifact"
+iteration: 1
+created_by: "ValidatorAgent"
+created_at: "2023-10-27T11:15:00Z"
+source_artifact_ids:
+  - "IMPL-UNKNOWN-01"
+status: "feedback-required"
+summary: "검증 대상인 ImplementationArtifact가 제공되지 않았거나, 내용이 없는 비정상적인 상태입니다. 스키마, 추적성, 증거 등 필수 요소를 모두 만족하지 못하여 검증에 실패했습니다."
+instructions_for_next_agent: |
+  아래 validation_result와 next_action을 기준으로
+  다음 단계 진행 또는 재작업을 수행하라.
+
+validated_artifact_id: "IMPL-UNKNOWN-01"
+validated_artifact_type: "ImplementationArtifact"
+validated_stage: "IMPL"
+validation_attempt: 1
+validation_result: "fail"
+
+checks:
+  - check_name: "schema"
+    result: "fail"
+    evidence: "제공된 입력은 YAML 형식이 아니며, ImplementationArtifact의 필수 필드가 모두 누락되었습니다. 아티팩트 본문 대신 단순 로그 메시지가 입력되었습니다."
+  - check_name: "traceability"
+    result: "fail"
+    evidence: "상위 아티팩트(UC, TD)를 참조하는 source_artifact_ids 필드가 존재하지 않습니다."
+  - check_name: "evidence"
+    result: "fail"
+    evidence: "구현 변경 사항을 증명하는 files_changed, traceability 등 핵심 증거 필드가 누락되었습니다."
+
+stage_check_guidance:
+  common_required_checks:
+    - "schema"
+    - "traceability"
+    - "evidence"
+    - "decision_consistency"
+    - "role_boundary"
+    - "no_regression"
+  UC:
+    required_checks:
+      - "scope_clarity"
+      - "acceptance_criteria_testability"
+      - "instruction_completeness"
+      - "e2e_decomposition_quality"
+      - "failure_mode_separation"
+  IMPL:
+    required_checks:
+      - "scope_adherence"
+      - "implementation_consistency"
+  TEST-DESIGN:
+    required_checks:
+      - "acceptance_criteria_coverage"
+      - "main_flow_coverage"
+      - "precondition_coverage"
+      - "trigger_coverage"
+      - "observable_outcome_coverage"
+      - "scenario_quality"
+      - "evidence_type_definition"
+  TEST-EXECUTION:
+    required_checks:
+      - "test_design_traceability"
+      - "scenario_execution_completeness"
+      - "evidence_quality"
+      - "evidence_type_consistency"
+      - "defect_quality"
+      - "score_consistency"
+  FB:
+    required_checks:
+      - "defect_task_mapping"
+      - "done_criteria_testability"
+      - "decision_consistency"
+      - "reqagent_handoff_boundary"
+
+violations:
+  - rule: "스키마 절대 준수 원칙 (Artifact Procedures 제1조)"
+    severity: "high"
+    description: "제출된 산출물이 ImplementationArtifact의 YAML 스키마를 준수하지 않았습니다. 아티팩트 본문이 아닌 단순 로그 메시지가 전달되었습니다."
+    recommended_action: "CodeAgent는 ImplementationArtifact 템플릿에 맞춰 산출물을 다시 생성하고 제출해야 합니다."
+
+warnings: []
+
+next_action:
+  action: "rework"
+  target_agent: "CodeAgent"
+  reason: "필수 산출물인 ImplementationArtifact가 누락되어 검증을 진행할 수 없습니다. CodeAgent의 재작업이 필요합니다."
+
+blocking_reason: "검증 대상 아티팩트의 부재 또는 비정상적인 형식으로 인해 후속 단계 진행이 불가능합니다."
+rework_target_artifact_id: "IMPL-UNKNOWN-01"
+
+action_rules:
+  allowed_actions:
+    - "proceed"
+    - "rework"
+    - "hold"
+  mapping:
+    pass: "proceed"
+    warning: "pma_decides_proceed_or_hold"
+    fail: "rework"
+  warning_allowed_actions:
+    - "proceed"
+    - "hold"
+
+status_rules:
+  mapping:
+    pass: "approved"
+    warning: "actionable"
+    fail: "feedback-required"
+  interpretation:
+    approved: "Validation passed and the artifact is approved for downstream progression."
+    actionable: "Validation found non-blocking risk that remains visible while PMAgent decides whether to proceed or hold."
+    feedback-required: "Validation failed and the producing agent must rework the source artifact before safe progression."

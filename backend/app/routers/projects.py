@@ -7,7 +7,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from sqlalchemy import func, select
+
 from app.db import repository as repo
+from app.db.models import Run
 from app.models.requests import CreateProjectRequest, UpdateProjectRequest
 from app.models.responses import (
     ModelUsage,
@@ -37,13 +40,12 @@ def create_project(body: CreateProjectRequest, request: Request) -> ProjectInfo:
             name=body.name,
             description=body.description,
         )
-        run_count = len(proj.runs)
         return ProjectInfo(
             project_id=proj.project_id,
             name=proj.name,
             description=proj.description or "",
             created_at=proj.created_at,
-            run_count=run_count,
+            run_count=0,  # just created, no runs yet
         )
 
 
@@ -53,13 +55,23 @@ def list_projects(request: Request) -> list[ProjectInfo]:
     sf = _sf(request)
     with sf() as session:
         projects = repo.list_projects(session)
+        # Efficient count query instead of loading all runs per project
+        project_ids = [p.project_id for p in projects]
+        run_counts: dict[str, int] = {}
+        if project_ids:
+            stmt = (
+                select(Run.project_id, func.count().label("cnt"))
+                .where(Run.project_id.in_(project_ids))
+                .group_by(Run.project_id)
+            )
+            run_counts = {row.project_id: row.cnt for row in session.execute(stmt).all()}
         return [
             ProjectInfo(
                 project_id=p.project_id,
                 name=p.name,
                 description=p.description or "",
                 created_at=p.created_at,
-                run_count=len(p.runs),
+                run_count=run_counts.get(p.project_id, 0),
             )
             for p in projects
         ]
@@ -107,12 +119,15 @@ def update_project(project_id: str, body: UpdateProjectRequest, request: Request
         )
         if proj is None:
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        run_count = session.scalar(
+            select(func.count()).select_from(Run).where(Run.project_id == project_id)
+        ) or 0
         return ProjectInfo(
             project_id=proj.project_id,
             name=proj.name,
             description=proj.description or "",
             created_at=proj.created_at,
-            run_count=len(proj.runs),
+            run_count=run_count,
         )
 
 

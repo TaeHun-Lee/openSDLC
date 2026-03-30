@@ -196,6 +196,22 @@ def load_and_merge_update(
     )
 
 
+def _input_satisfied(required_input: str, available: set[str]) -> bool:
+    """Check if a required input is satisfied by the available artifacts.
+
+    Agent configs use descriptive input names like "ValidationReportArtifact for UC stage"
+    while outputs are base names like "ValidationReportArtifact".  An input is satisfied if:
+    1. Exact match exists in available, OR
+    2. Any available artifact is a prefix of the input (base type match).
+    """
+    if not available:
+        return False
+    if required_input in available:
+        return True
+    # Fuzzy: "ValidationReportArtifact" satisfies "ValidationReportArtifact for UC stage"
+    return any(required_input.startswith(art) for art in available)
+
+
 def validate_pipeline_runtime(pipeline_def: PipelineDefinition) -> PipelineValidationResult:
     """Validate a pipeline definition against runtime environment and agent configs.
 
@@ -215,8 +231,9 @@ def validate_pipeline_runtime(pipeline_def: PipelineDefinition) -> PipelineValid
     available_agents = load_all_agents()
     default_provider = get_llm_provider()
 
-    # Track which artifact types are available at each point in the pipeline
-    available_artifacts: set[str] = set()
+    # Track which artifact types are available at each point in the pipeline.
+    # "user request" is always available from PipelineState.user_story.
+    available_artifacts: set[str] = {"user request"}
     step_agents: dict[int, str] = {}  # step_num -> agent_id
 
     for step_def in pipeline_def.steps:
@@ -258,20 +275,35 @@ def validate_pipeline_runtime(pipeline_def: PipelineDefinition) -> PipelineValid
             ))
 
         # 3. Artifact flow analysis
+        #
+        # Agent configs declare primary_inputs listing ALL possible inputs across
+        # modes, rework cycles, and iterations.  Most inputs are conditional:
+        # - ValidatorAgent lists 6+ artifact types but validates only 1 per step
+        # - TestAgent has design/execution modes with disjoint inputs
+        # - ReqAgent only needs ValidationReport when reworking
+        #
+        # Strategy: warn only when NONE of the declared inputs are available,
+        # meaning the agent has nothing to work with at this pipeline point.
+        # Individual missing inputs are expected for polymorphic agents.
         consumes: list[str] = []
         produces: list[str] = list(agent_config.primary_outputs)
+        missing_inputs: list[str] = []
 
         for inp in agent_config.primary_inputs:
             consumes.append(inp)
-            if inp not in available_artifacts and available_artifacts:
-                warnings.append(ValidationIssue(
-                    type="input_not_available",
-                    step=step_num,
-                    agent=agent_id,
-                    message=f"Agent '{agent_id}' expects input '{inp}' "
-                            f"but it has not been produced by any preceding step. "
-                            f"Available: {sorted(available_artifacts) or '(none)'}",
-                ))
+            if not _input_satisfied(inp, available_artifacts):
+                missing_inputs.append(inp)
+
+        # Warn only if ALL inputs are missing (agent has nothing to work with)
+        if missing_inputs and len(missing_inputs) == len(agent_config.primary_inputs):
+            warnings.append(ValidationIssue(
+                type="input_not_available",
+                step=step_num,
+                agent=agent_id,
+                message=f"Agent '{agent_id}' has no available inputs at this step. "
+                        f"Expected: {agent_config.primary_inputs}. "
+                        f"Available: {sorted(available_artifacts) or '(none)'}",
+            ))
 
         artifact_flow.append(ArtifactFlowStep(
             step=step_num, agent=agent_id,
@@ -306,8 +338,14 @@ def validate_pipeline_runtime(pipeline_def: PipelineDefinition) -> PipelineValid
         ))
 
     if has_pm:
-        pm_step = next(s for s in pipeline_def.steps if s.agent == "PMAgent")
-        if not pm_step.on_next_iteration:
+        # Check if ANY PMAgent step has on_next_iteration (not just the first)
+        pm_has_routing = any(
+            s.on_next_iteration
+            for s in pipeline_def.steps
+            if s.agent == "PMAgent"
+        )
+        if not pm_has_routing:
+            pm_step = next(s for s in pipeline_def.steps if s.agent == "PMAgent")
             warnings.append(ValidationIssue(
                 type="missing_iteration_routing",
                 step=pm_step.step,

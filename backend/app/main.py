@@ -55,10 +55,11 @@ def create_app() -> FastAPI:
     )
 
     # CORS — configurable via OPENSDLC_CORS_ORIGINS env var (comma-separated)
+    origins = get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=get_cors_origins(),
-        allow_credentials=True,
+        allow_origins=origins,
+        allow_credentials=(origins != ["*"]),
         allow_methods=["*"],
         allow_headers=["*"],
     )

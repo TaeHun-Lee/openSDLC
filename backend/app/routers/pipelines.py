@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import yaml
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+
+logger = logging.getLogger(__name__)
+
+import os
 
 from app.core.config import PIPELINES_DIR
 from app.core.pipeline.graph_builder import load_pipeline_definition
@@ -20,7 +26,7 @@ from app.services.pipeline_compiler import (
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
-DEFAULT_PIPELINE = "full_spiral"
+DEFAULT_PIPELINE = os.environ.get("OPENSDLC_DEFAULT_PIPELINE", "full_spiral")
 
 
 def _is_default(name: str) -> bool:
@@ -41,6 +47,7 @@ def _to_pipeline_info(path, *, is_default: bool) -> PipelineInfo:
                 model=s.model,
                 provider=s.provider,
                 on_fail=s.on_fail,
+                on_next_iteration=s.on_next_iteration,
                 mode=s.mode,
             )
             for s in pipeline_def.steps
@@ -70,7 +77,8 @@ async def list_pipelines() -> list[PipelineListItem]:
                     is_default=_is_default(path.stem),
                 )
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to load pipeline %s: %s", path.stem, exc)
             continue
 
     return items

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { api } from "../client"
-import type { RunSummary, RunDetail, RunArtifacts, RunUsage, ProgressInfo } from "../types"
+import type { RunSummary, RunDetail, RunArtifacts, RunUsage } from "../types"
 
 export function useRuns(projectId?: string) {
   const params = projectId ? `?project_id=${projectId}` : ""
@@ -15,6 +15,13 @@ export function useRun(runId: string) {
     queryKey: ["runs", runId],
     queryFn: () => api.get<RunDetail>(`/runs/${runId}`),
     enabled: !!runId,
+    // Fallback polling: ensures status updates even when SSE is disconnected.
+    // Stops polling once run reaches a terminal state.
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      if (status === "running" || status === "pending") return 5_000
+      return false
+    },
   })
 }
 
@@ -35,11 +42,3 @@ export function useRunUsage(runId: string) {
   })
 }
 
-export function useRunProgress(runId: string, enabled = false) {
-  return useQuery({
-    queryKey: ["runs", runId, "progress"],
-    queryFn: () => api.get<ProgressInfo>(`/runs/${runId}/progress`),
-    enabled: enabled && !!runId,
-    refetchInterval: 2_000,
-  })
-}

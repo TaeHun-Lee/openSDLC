@@ -1,10 +1,14 @@
-import { Moon, Sun, Monitor, Activity } from "lucide-react"
+import { Moon, Sun, Monitor, Activity, Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/hooks/use-theme"
 import { useHealth } from "@/api/queries/health"
 import { cn } from "@/lib/utils"
 
-export function Header() {
+interface HeaderProps {
+  onMenuClick?: () => void
+}
+
+export function Header({ onMenuClick }: HeaderProps) {
   const { theme, setTheme } = useTheme()
   const { data: health, isError } = useHealth()
 
@@ -14,14 +18,23 @@ export function Header() {
   }
 
   return (
-    <header className="flex h-14 items-center justify-between border-b px-6">
+    <header className="flex h-14 items-center justify-between border-b px-4 md:px-6">
       <div className="flex items-center gap-3">
+        {/* Mobile menu button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="md:hidden"
+          onClick={onMenuClick}
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
         <h1 className="text-lg font-bold">OpenSDLC</h1>
       </div>
 
       <div className="flex items-center gap-3">
         {/* Health status */}
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
           <Activity className={cn("h-4 w-4", isError ? "text-red-500" : "text-green-500")} />
           {health ? (
             <span>{health.llm_provider} / {health.model}</span>

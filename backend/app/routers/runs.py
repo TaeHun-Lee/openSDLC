@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.core.artifacts.code_extractor import extract_code_files, get_runtime_info
+from app.core.artifacts.code_extractor import get_runtime_info
+from app.core.artifacts.parser import extract_code_blocks_from_narrative
 from app.core.artifacts.parser import extract_artifact_id
 from app.db import repository as repo
 from app.db.models import Iteration as IterationModel
@@ -126,6 +130,8 @@ def list_runs(request: Request, project_id: str | None = None) -> list[RunSummar
     sf = _get_session_factory(request)
     with sf() as session:
         db_runs = repo.list_runs(session, project_id=project_id)
+        run_ids = [r.run_id for r in db_runs]
+        step_counts = repo.count_steps_by_run(session, run_ids)
         return [
             RunSummary(
                 run_id=r.run_id,
@@ -133,6 +139,7 @@ def list_runs(request: Request, project_id: str | None = None) -> list[RunSummar
                 status=r.status,
                 created_at=r.created_at,
                 finished_at=r.finished_at,
+                steps_completed=step_counts.get(str(r.run_id), 0),
                 error=r.error,
             )
             for r in db_runs
@@ -217,7 +224,8 @@ async def stream_events(
     if active is not None:
         # Live SSE stream with disconnect detection
         async def event_generator():
-            async for idx, event in active.event_bus.subscribe(last_index=last_event_id):
+            start_idx = (last_event_id + 1) if last_event_id is not None else 0
+            async for idx, event in active.event_bus.subscribe(last_index=start_idx):
                 if await request.is_disconnected():
                     break
                 if event is None:
@@ -288,6 +296,11 @@ def get_artifacts(run_id: str, request: Request, iteration_num: int | None = Non
                     artifact_id=a.artifact_id,
                     yaml_content=yaml_content,
                 ))
+            else:
+                logger.warning(
+                    "Artifact file missing: run=%s type=%s path=%s",
+                    run_id, a.artifact_type, a.file_path,
+                )
 
         db_code_files = repo.list_code_files(session, run_id, iteration_num=iteration_num)
         for cf in db_code_files:
@@ -300,6 +313,11 @@ def get_artifacts(run_id: str, request: Request, iteration_num: int | None = Non
                     language=lang,
                     content=content,
                 ))
+            else:
+                logger.warning(
+                    "Code file missing: run=%s path=%s",
+                    run_id, cf.file_path,
+                )
 
     # Fallback: if DB has no artifacts (still running), use in-memory state
     if not artifact_list:
@@ -315,13 +333,17 @@ def get_artifacts(run_id: str, request: Request, iteration_num: int | None = Non
                     ))
             impl_yaml = latest.get("ImplementationArtifact", "")
             if impl_yaml:
-                for cf in extract_code_files(impl_yaml):
-                    code_files_list.append(CodeFileInfo(
-                        path=cf["path"],
-                        language=cf.get("language", ""),
-                        content=cf["content"],
-                    ))
                 runtime_info = get_runtime_info(impl_yaml)
+
+            # Extract code from narrative code blocks
+            code_blocks_text = active.final_state.get("latest_code_blocks", {}).get("CodeAgent", "")
+            if code_blocks_text:
+                for cb in extract_code_blocks_from_narrative(code_blocks_text):
+                    code_files_list.append(CodeFileInfo(
+                        path=cb["path"],
+                        language=cb.get("language", ""),
+                        content=cb["content"],
+                    ))
 
     return RunArtifacts(
         run_id=run_id,
@@ -364,8 +386,8 @@ def get_progress(run_id: str, request: Request) -> ProgressInfo:
         if db_run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         elapsed = None
-        if db_run.finished_at and db_run.created_at:
-            elapsed = round(db_run.finished_at - db_run.created_at, 1)
+        if db_run.finished_at is not None and db_run.created_at is not None:
+            elapsed = round((db_run.finished_at - db_run.created_at).total_seconds(), 1)
         return ProgressInfo(
             run_id=run_id,
             status=db_run.status,
@@ -457,6 +479,11 @@ def get_iteration_artifacts(run_id: str, iteration_num: int, request: Request) -
                     artifact_id=a.artifact_id,
                     yaml_content=yaml_content,
                 ))
+            else:
+                logger.warning(
+                    "Artifact file missing: run=%s iter=%d type=%s path=%s",
+                    run_id, iteration_num, a.artifact_type, a.file_path,
+                )
 
         db_code_files = repo.list_code_files(session, run_id, iteration_num=iteration_num)
         code_files_list: list[CodeFileInfo] = []
@@ -470,6 +497,11 @@ def get_iteration_artifacts(run_id: str, iteration_num: int, request: Request) -
                     language=lang,
                     content=content,
                 ))
+            else:
+                logger.warning(
+                    "Code file missing: run=%s iter=%d path=%s",
+                    run_id, iteration_num, cf.file_path,
+                )
 
     return RunArtifacts(
         run_id=run_id,

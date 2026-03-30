@@ -18,4 +18,21 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes("node_modules/shiki") || id.includes("node_modules/@shikijs")) {
+            return "shiki"
+          }
+          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-")) {
+            return "recharts"
+          }
+          if (id.includes("node_modules/@radix-ui")) {
+            return "radix"
+          }
+        },
+      },
+    },
+  },
 })

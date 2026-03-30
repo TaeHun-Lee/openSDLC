@@ -27,25 +27,30 @@ function eventToMessage(event: EventInfo): NarrativeMessage {
     message: event.message,
     iterationNum: event.iteration_num,
     createdAt: event.created_at,
+    ...(event.data ? { data: event.data } : {}),
   }
 }
+
+const MAX_MESSAGES = 2000
 
 export const useNarrativeStore = create<NarrativeState>()((set) => ({
   messages: [],
   isResume: false,
   addEvent: (event) =>
-    set((state) => ({
-      messages: [...state.messages, eventToMessage(event)],
-      isResume: event.event_type === "pipeline_started" && event.message?.includes("resume")
-        ? true
-        : state.isResume,
-    })),
+    set((state) => {
+      // Prevent duplicate messages by ID (e.g. on SSE reconnect replay)
+      if (state.messages.some((m) => m.id === event.id)) return state
+
+      const updated = [...state.messages, eventToMessage(event)]
+      return {
+        messages: updated.length > MAX_MESSAGES ? updated.slice(-MAX_MESSAGES) : updated,
+        isResume: event.event_type === "pipeline_resumed" ? true : state.isResume,
+      }
+    }),
   loadFromReplay: (events) =>
     set({
       messages: events.map(eventToMessage),
-      isResume: events.some(
-        (e) => e.event_type === "pipeline_started" && e.message?.includes("resume"),
-      ),
+      isResume: events.some((e) => e.event_type === "pipeline_resumed"),
     }),
   clear: () => set({ messages: [], isResume: false }),
 }))

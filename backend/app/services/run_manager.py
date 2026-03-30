@@ -19,7 +19,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.artifacts.code_extractor import write_code_files
+from app.core.artifacts.code_extractor import write_code_blocks
 from app.core.artifacts.parser import extract_artifact_id
 from app.core.config import PIPELINES_DIR, get_runs_dir
 from app.core.llm_client import QuotaExhaustedError
@@ -73,6 +73,9 @@ class RunRecord:
     # Webhook notification
     webhook_url: str | None = None
     webhook_events: list[str] | None = None  # e.g. ["completed", "failed"]
+    # Resume support — explicitly declared instead of dynamic attributes
+    artifact_saver: object | None = None  # Callable for saving artifacts
+    restored_state: dict | None = None  # PipelineState dict for resume
 
 
 class RunManager:
@@ -152,9 +155,15 @@ class RunManager:
                 for art in db_step.artifacts:
                     artifact_type = art.artifact_type or ""
                     fpath = Path(art.file_path)
-                    if fpath.is_file():
-                        artifact_yaml = fpath.read_text(encoding="utf-8")
-                        latest_artifacts[artifact_type] = artifact_yaml
+                    try:
+                        if fpath.is_file():
+                            artifact_yaml = fpath.read_text(encoding="utf-8")
+                            latest_artifacts[artifact_type] = artifact_yaml
+                    except (OSError, UnicodeDecodeError) as exc:
+                        logger.warning(
+                            "Failed to read artifact file %s for run=%s step=%d: %s",
+                            fpath, run_id, db_step.step_num, exc,
+                        )
                     break  # one artifact per step
 
                 step_result = StepResult(
@@ -173,8 +182,8 @@ class RunManager:
                 step_result["output_tokens"] = db_step.output_tokens
                 step_result["cache_read_tokens"] = db_step.cache_read_tokens
                 step_result["cache_creation_tokens"] = db_step.cache_creation_tokens
-                step_result["started_at"] = db_step.started_at or 0
-                step_result["finished_at"] = db_step.finished_at or 0
+                step_result["started_at"] = db_step.started_at
+                step_result["finished_at"] = db_step.finished_at
                 step_result["step_num"] = db_step.step_num
                 step_result["iteration_num"] = db_step.iteration_num
                 step_result["rework_seq"] = db_step.rework_seq or 0
@@ -188,13 +197,25 @@ class RunManager:
                 elif db_step.verdict == "pass":
                     last_rework_count = 0
 
-            # Determine pm_decision from the last PMAgent step
+            # Determine pm_decision from the last PMAgent step's actual verdict
             for sr in reversed(steps_completed):
                 if sr["agent_id"] == "PMAgent":
-                    # If PM said "continue", iteration_count was already incremented
-                    # We need to preserve that
-                    pm_decision = "continue"  # assume continue since pipeline didn't end
+                    verdict = sr.get("validation_result", "")
+                    if verdict in ("stop", "fail"):
+                        pm_decision = "stop"
+                    else:
+                        pm_decision = "continue"
                     break
+
+            # Read max_reworks_per_gate from pipeline definition
+            pipeline_path = PIPELINES_DIR / f"{db_run.pipeline_name}.yaml"
+            if not pipeline_path.is_file():
+                pipeline_path = Path(db_run.pipeline_name)
+            try:
+                pipeline_def = load_pipeline_definition(pipeline_path)
+                max_reworks = pipeline_def.max_reworks_per_gate
+            except Exception:
+                max_reworks = 3  # fallback default
 
             state: PipelineState = {
                 "user_story": db_run.user_story,
@@ -204,7 +225,7 @@ class RunManager:
                 "iteration_count": last_iteration,
                 "max_iterations": db_run.max_iterations or 3,
                 "rework_count": last_rework_count,
-                "max_reworks_per_gate": 3,  # will be overridden by pipeline_def
+                "max_reworks_per_gate": max_reworks,
                 "pipeline_status": "running",
                 "pm_decision": pm_decision,
             }
@@ -272,8 +293,8 @@ class RunManager:
             webhook_url=webhook_url,
             webhook_events=webhook_events,
         )
-        record._artifact_saver = artifact_saver  # type: ignore[attr-defined]
-        record._restored_state = restored_state  # type: ignore[attr-defined]
+        record.artifact_saver = artifact_saver
+        record.restored_state = restored_state
         self._active_runs[run_id] = record
 
         asyncio.create_task(self._execute_run(record, is_resume=True))
@@ -328,7 +349,7 @@ class RunManager:
             webhook_url=webhook_url,
             webhook_events=webhook_events,
         )
-        record._artifact_saver = artifact_saver  # type: ignore[attr-defined]
+        record.artifact_saver = artifact_saver
         self._active_runs[run_id] = record
 
         asyncio.create_task(self._execute_run(record))
@@ -413,6 +434,7 @@ class RunManager:
             agent_id: str,
             artifact_type: str,
             artifact_yaml: str,
+            code_blocks: list[dict[str, str]] | None = None,
         ) -> None:
             """Save artifact YAML to disk and DB immediately after step completion."""
             step_num_in_iter = step_counter_per_iter.get(iter_num, 1)
@@ -433,10 +455,10 @@ class RunManager:
                         file_path=str(file_path),
                     )
 
-                # Extract code files immediately for ImplementationArtifact
-                if artifact_type.startswith("ImplementationArtifact"):
+                # Extract code files for ImplementationArtifact
+                if artifact_type.startswith("ImplementationArtifact") and code_blocks:
                     workspace_dir = get_runs_dir() / run_id / f"iteration-{iter_num:02d}" / "workspace"
-                    written = write_code_files(artifact_yaml, workspace_dir)
+                    written = write_code_blocks(code_blocks, workspace_dir)
                     with self._session_factory() as session:
                         for fpath in written:
                             rel = str(fpath.relative_to(workspace_dir))
@@ -453,6 +475,18 @@ class RunManager:
                     "Failed to save artifact for run=%s iter=%d step=%d",
                     run_id, iter_num, step_num_in_iter,
                 )
+                # Emit SSE warning so frontend can show real-time notification
+                record = self._active_runs.get(run_id)
+                if record:
+                    record.event_bus.emit(RunEvent(
+                        event_type=EventType.PIPELINE_WARNING,
+                        data={
+                            "run_id": run_id,
+                            "message": f"Artifact save failed for step {step_num_in_iter} (iter {iter_num})",
+                            "agent_id": agent_id,
+                            "iteration_num": iter_num,
+                        },
+                    ))
 
         return _on_emit, _artifact_saver
 
@@ -485,8 +519,8 @@ class RunManager:
             pipeline_def.max_iterations = record.max_iterations
             record.steps_total = len(pipeline_def.steps)
 
-            artifact_saver = getattr(record, "_artifact_saver", None)
-            restored_state = getattr(record, "_restored_state", None)
+            artifact_saver = record.artifact_saver
+            restored_state = record.restored_state
 
             def _run_sync() -> dict:
                 # Check cancellation before starting
@@ -510,18 +544,21 @@ class RunManager:
                 # Finalize DB state (status, iterations, events) before emitting completion
                 try:
                     await asyncio.to_thread(self._persist_completed_run, record)
-                except Exception:
+                except Exception as persist_exc:
                     logger.exception(
                         "Post-run persistence failed for run %s (pipeline succeeded)",
                         record.run_id,
                     )
                     # Still mark as completed — pipeline itself succeeded.
-                    # Artifacts are already saved in real-time; only event log may be lost.
+                    # Record the persistence error so users can see partial data warning.
+                    persist_error = f"Pipeline completed but post-run persistence failed: {persist_exc}"
+                    record.error = persist_error[:2000]
                     try:
                         with self._session_factory() as session:
                             repo.update_run_status(
                                 session, record.run_id, "completed",
                                 finished_at=record.finished_at,
+                                error=record.error,
                             )
                     except Exception:
                         logger.exception("Failed to update run status for %s", record.run_id)
@@ -566,7 +603,8 @@ class RunManager:
             except Exception as exc:
                 record.status = RunStatus.FAILED
                 record.finished_at = time.time()
-                record.error = f"{type(exc).__name__}: {exc}"
+                error_msg = f"{type(exc).__name__}: {exc}"
+                record.error = error_msg[:2000]
                 logger.exception("Pipeline run %s failed", record.run_id)
                 record.event_bus.emit(
                     RunEvent(
