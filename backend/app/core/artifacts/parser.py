@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 _FILE_MARKER_RE = re.compile(
     r"<!--\s*FILE:\s*(.+?)\s*-->\s*\n"   # <!-- FILE: path -->
-    r"```(\w*)\s*\n"                       # ```language
+    r"```([^\n]*?)\s*\n"                   # ```language
     r"(.*?)"                               # content (non-greedy)
     r"\n```",                              # closing fence
     re.DOTALL,
 )
 
 _FILE_BLOCK_RE = re.compile(
-    r"<!--\s*FILE:\s*.+?\s*-->\s*\n```\w*\s*\n.*?\n```\s*\n?",
+    r"<!--\s*FILE:\s*.+?\s*-->\s*\n```[^\n]*?\s*\n.*?\n```\s*\n?",
     re.DOTALL,
 )
 
@@ -53,13 +53,28 @@ def strip_code_blocks_from_narrative(narrative: str) -> str:
 
 def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:
     """Split LLM response into (narrative_text, yaml_artifact)."""
-    fence_match = re.search(
-        r"```(?:yaml)?\s*\n(.*?)```",
-        response_text,
-        re.DOTALL,
-    )
+    # 1. Look for a markdown block containing 'artifact_id:'
+    matches = list(re.finditer(r"```([^\n]*?)\s*\n(.*?)```", response_text, re.DOTALL))
+    
+    fence_match = None
+    # Prefer blocks that are NOT marked as files
+    for match in matches:
+        prefix = response_text[:match.start()]
+        if re.search(r"<!--\s*FILE:\s*[^>]+-->\s*$", prefix):
+            continue
+        if re.search(r"^\s*artifact_id:", match.group(2), re.MULTILINE):
+            fence_match = match
+            break
+
+    # If not found, accept any block with artifact_id:
+    if not fence_match:
+        for match in matches:
+            if re.search(r"^\s*artifact_id:", match.group(2), re.MULTILINE):
+                fence_match = match
+                break
+
     if fence_match:
-        yaml_part = fence_match.group(1).strip()
+        yaml_part = fence_match.group(2).strip()
         narrative = response_text[:fence_match.start()].strip()
         after = response_text[fence_match.end():].strip()
         if after:
@@ -67,6 +82,7 @@ def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:
         yaml_part = _strip_extra_documents(yaml_part)
         return narrative, yaml_part
 
+    # 2. Line-based fallback
     lines = response_text.splitlines()
     start_idx = None
     for i, line in enumerate(lines):
@@ -77,9 +93,11 @@ def split_narrative_and_yaml(response_text: str) -> tuple[str, str]:
     if start_idx is not None:
         narrative = "\n".join(lines[:start_idx]).strip()
         yaml_part = "\n".join(lines[start_idx:]).strip()
+        yaml_part = re.sub(r"```\s*$", "", yaml_part).strip()
         yaml_part = _strip_extra_documents(yaml_part)
         return narrative, yaml_part
 
+    # 3. Final fallback: try parsing the whole thing
     text = response_text.strip()
     try:
         data = yaml.safe_load(text)
