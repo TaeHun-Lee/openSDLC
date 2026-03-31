@@ -44,6 +44,10 @@ _SATISFACTION_SCORE_RE = re.compile(
     r"SATISFACTION[_\s-]*SCORE\s*[:=\-]\s*[\"']?(\d+)[\"']?",
     re.IGNORECASE,
 )
+_PM_ACTION_TYPE_RE = re.compile(
+    r"PM[_\s-]*ACTION[_\s-]*TYPE\s*[:=\-]\s*[\"']?(new|modify)[\"']?",
+    re.IGNORECASE,
+)
 
 
 def _resolve_output_type(agent_config: AgentConfig, step: StepDefinition) -> str:
@@ -256,6 +260,25 @@ def _extract_satisfaction_score(text: str) -> int:
         return int(m.group(1))
 
     return 0
+
+
+def _extract_pm_action_type(text: str) -> str:
+    """Extract PM_ACTION_TYPE from PMAgent output. Defaults to 'new'.
+
+    Expected values: 'new' | 'modify'
+    """
+    m = _PM_ACTION_TYPE_RE.search(text)
+    if m:
+        return m.group(1).lower()
+
+    # Retry after stripping markdown noise
+    cleaned = _strip_markdown_noise(text)
+    m = _PM_ACTION_TYPE_RE.search(cleaned)
+    if m:
+        logger.info("[PMAgent] PM_ACTION_TYPE found after markdown cleanup: %s", m.group(1))
+        return m.group(1).lower()
+
+    return "new"
 
 
 def create_agent_node(
@@ -472,13 +495,9 @@ def create_agent_node(
         # Update code blocks context for downstream agents (PMAgent, TestAgent)
         new_code_blocks = {**state.get("latest_code_blocks", {})}
         if code_blocks:
-            code_text_parts = []
-            for block in code_blocks:
-                code_text_parts.append(
-                    f"<!-- FILE: {block['path']} -->\n"
-                    f"```{block['language']}\n{block['content']}\n```"
-                )
-            new_code_blocks[step.agent] = "\n\n".join(code_text_parts)
+            prev_context = new_code_blocks.get(step.agent, "")
+            merged_context = merge_code_blocks(prev_context, code_blocks)
+            new_code_blocks[step.agent] = merged_context
 
         new_rework = state["rework_count"]
         if step.agent == "ValidatorAgent":
@@ -495,22 +514,39 @@ def create_agent_node(
         }
 
         # PMAgent iteration decision extraction
-        if step.on_next_iteration and step.agent == "PMAgent":
+        if step.agent == "PMAgent":
             full_text = response.text
-            pm_decision = _extract_pm_decision(full_text)
-            score = _extract_satisfaction_score(full_text)
-            decision_label = {"continue": "CONTINUE (다음 iteration)", "done": "DONE (완료)"}.get(
-                pm_decision, pm_decision
-            )
-            print(f"[{step.agent}] Iteration 판정: {decision_label} (만족도: {score}/100)")
-            step_result["satisfaction_score"] = score
-            state_update["pm_decision"] = pm_decision
+            
+            # Step 1 (Initializer) extracts action type (new vs modify)
+            if step.user_message_strategy == "pm_initializer":
+                action_type = _extract_pm_action_type(full_text)
+                state_update["pm_action_type"] = action_type
+                print(f"[{step.agent}] Action 판정: {action_type.upper()}")
 
-            # Increment iteration_count when continuing
-            if pm_decision == "continue":
-                state_update["iteration_count"] = state["iteration_count"] + 1
-                # Reset rework counter for new iteration
-                state_update["rework_count"] = 0
+            # Assessment step extracts iteration decision
+            if step.on_next_iteration:
+                pm_decision = _extract_pm_decision(full_text)
+                score = _extract_satisfaction_score(full_text)
+                decision_label = {"continue": "CONTINUE (다음 iteration)", "done": "DONE (완료)"}.get(
+                    pm_decision, pm_decision
+                )
+                print(f"[{step.agent}] Iteration 판정: {decision_label} (만족도: {score}/100)")
+                step_result["satisfaction_score"] = score
+                state_update["pm_decision"] = pm_decision
+
+                # Increment iteration_count when continuing
+                if pm_decision == "continue":
+                    state_update["iteration_count"] = state["iteration_count"] + 1
+                    # Reset rework counter for new iteration
+                    state_update["rework_count"] = 0
+
+        return state_update
+
+    node_fn.__name__ = step_node_id
+    return node_fn
+tion_count"] + 1
+                    # Reset rework counter for new iteration
+                    state_update["rework_count"] = 0
 
         return state_update
 

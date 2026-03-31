@@ -20,6 +20,11 @@ class StartRunRequest(BaseModel):
         min_length=10,
         examples=["간단한 할 일 관리 웹 앱을 만들어줘. 할 일 추가, 완료 체크, 삭제 기능이 필요해."],
     )
+    workspace_path: str | None = Field(
+        None,
+        description="Optional path to an existing workspace to analyze and potentially modify",
+        examples=["/path/to/my-existing-project"],
+    )
     max_iterations: int = Field(
         default=1,
         ge=1,

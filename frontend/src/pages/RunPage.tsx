@@ -72,8 +72,14 @@ export function RunPage() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">User Story</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <p className="text-sm whitespace-pre-wrap">{run.user_story}</p>
+          {run.workspace_path && (
+            <div className="rounded-md bg-muted/50 p-2 text-xs">
+              <span className="font-semibold">Target Workspace:</span>{" "}
+              <code className="rounded bg-muted px-1 py-0.5">{run.workspace_path}</code>
+            </div>
+          )}
         </CardContent>
       </Card>
 

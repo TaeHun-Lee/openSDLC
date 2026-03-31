@@ -105,11 +105,19 @@ def create_pipeline(pipeline_def: PipelineDefinition):
     return graph.compile()
 
 
+from app.core.artifacts.workspace_scanner import scan_workspace
+
+
 def run_pipeline(
     pipeline_def: PipelineDefinition,
     user_story: str,
+    workspace_path: str | Path | None = None,
 ) -> PipelineState:
     """Execute a dynamic pipeline end-to-end."""
+    workspace_context = {}
+    if workspace_path:
+        workspace_context = scan_workspace(workspace_path)
+
     initial_state: PipelineState = {
         "user_story": user_story,
         "steps_completed": [],
@@ -121,7 +129,9 @@ def run_pipeline(
         "max_reworks_per_gate": pipeline_def.max_reworks_per_gate,
         "pipeline_status": "running",
         "pm_decision": "",
+        "pm_action_type": "",
         "latest_code_blocks": {},
+        "workspace_context": workspace_context,
     }
 
     return _execute_pipeline(pipeline_def, initial_state)

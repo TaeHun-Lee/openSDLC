@@ -110,6 +110,7 @@ async def start_run(body: StartRunRequest, request: Request) -> RunCreated:
         user_story=body.user_story,
         max_iterations=body.max_iterations,
         project_id=body.project_id,
+        workspace_path=body.workspace_path,
         webhook_url=body.webhook_url,
         webhook_events=body.webhook_events,
     )
@@ -192,6 +193,7 @@ def get_run(run_id: str, request: Request) -> RunDetail:
             status=active.status.value if active else db_run.status,
             max_iterations=db_run.max_iterations or 3,
             project_id=db_run.project_id,
+            workspace_path=db_run.workspace_path,
             created_at=db_run.created_at,
             finished_at=db_run.finished_at,
             iterations=iterations_info,

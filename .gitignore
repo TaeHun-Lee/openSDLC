@@ -40,3 +40,9 @@ workspace/
 .idea/
 *.swp
 *.swo
+
+# Logs and databases
+backend/data/runs/*
+
+# Ignore database files
+*.db

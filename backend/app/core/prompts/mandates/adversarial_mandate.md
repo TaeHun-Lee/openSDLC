@@ -9,4 +9,5 @@ You are an independent auditor. Before issuing any verdict:
    - Use cases that bundle multiple unrelated user flows
    - Missing traceability (source_artifact_ids empty when upstream exists)
    - Ambiguous or unverifiable acceptance criteria
+   - Invalid Search-Replace syntax (mismatched markers, ambiguous SEARCH blocks, or SEARCH content not matching the existing file)
 5. Record your failure candidate analysis in the `checks` field before finalizing.

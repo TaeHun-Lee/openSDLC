@@ -17,7 +17,6 @@ Agent 간에 전달되는 것은 오직 **YAML 아티팩트 문자열**뿐이다
 - 하나의 LLM 호출에서 여러 Agent 역할을 수행하게 하지 않는다.
 
 ### 현재 상태
-- **PoC 완성** (`poc/`): CLI로 파이프라인을 실행하는 독립 구현체
 - **Backend 구현 완료** (`backend/`): FastAPI 서버 — 프로젝트/실행 관리, SSE 실시간 스트리밍, SQLite 영속화, API Key 인증
 - **방법론 명세** (`core/`): git submodule, 읽기 전용 (절대 수정 금지)
 

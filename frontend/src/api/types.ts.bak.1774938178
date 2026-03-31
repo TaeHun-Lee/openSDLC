@@ -116,15 +116,11 @@ export interface IterationInfo {
 export interface RunSummary {
   run_id: string
   pipeline_name: string
-  user_story: string
   status: string
   created_at: number
   finished_at: number | null
   steps_completed: number
   error: string | null
-  // New fields for live progress on dashboard
-  current_agent: string | null
-  current_step: number | null
 }
 
 export interface RunDetail {

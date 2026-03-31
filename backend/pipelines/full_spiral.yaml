@@ -5,7 +5,7 @@ steps:
   # Step 1: PMAgent — 사용자 요청 접수 및 프로젝트 초기화
   - step: 1
     agent: PMAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     user_message_strategy: pm_initializer
     extra_mandate_files:
       - "autonomous_pipeline_mandate.md"
@@ -13,12 +13,12 @@ steps:
   # Step 2: ReqAgent — 요구사항 명세화 (UseCaseModelArtifact)
   - step: 2
     agent: ReqAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
 
   # Step 3: ValidatorAgent (UC) — 요구사항 아티팩트 검증
   - step: 3
     agent: ValidatorAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     on_fail: ReqAgent
 
   # Step 4: TestAgent (Design Mode) — 테스트 시나리오 설계 (TestDesignArtifact)
@@ -36,14 +36,14 @@ steps:
   # Step 6: CodeAgent — 기능 구현 및 코드 생성 (ImplementationArtifact)
   - step: 6
     agent: CodeAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     max_tokens: 16384
     min_response_chars: 2000
 
   # Step 7: ValidatorAgent (IMPL) — 구현 결과 검증
   - step: 7
     agent: ValidatorAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     on_fail: CodeAgent
 
   # Step 8: TestAgent (Execution Mode) — 테스트 실행/검증 (TestReportArtifact)
@@ -61,18 +61,18 @@ steps:
   # Step 10: CoordAgent — 다음 이터레이션 피드백 (FeedbackArtifact)
   - step: 10
     agent: CoordAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
 
   # Step 11: ValidatorAgent (FB) — 피드백 실행 가능성/일관성 검증
   - step: 11
     agent: ValidatorAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     on_fail: CoordAgent
 
   # Step 12: PMAgent — 코드 구현체 분석, iteration_assessment 작성, 다음 iteration 판정
   - step: 12
     agent: PMAgent
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
     on_next_iteration: ReqAgent
     max_tokens: 16384
     min_response_chars: 1500

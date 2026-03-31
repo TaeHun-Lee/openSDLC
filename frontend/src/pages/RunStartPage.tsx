@@ -25,6 +25,7 @@ export function RunStartPage() {
   const [userStory, setUserStory] = useState("")
   const [pipeline, setPipeline] = useState("")
   const [projectId, setProjectId] = useState("")
+  const [workspacePath, setWorkspacePath] = useState("")
   const [error, setError] = useState("")
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [maxIterations, setMaxIterations] = useState<number | null>(null)
@@ -85,6 +86,7 @@ export function RunStartPage() {
         user_story: userStory,
         pipeline,
         project_id: projectId || null,
+        workspace_path: workspacePath.trim() || null,
         ...(maxIterations != null ? { max_iterations: maxIterations } : {}),
       })
       navigate(`/runs/${result.run_id}`)
@@ -156,6 +158,21 @@ export function RunStartPage() {
                   ))}
                 </select>
               </div>
+            </div>
+
+            <div>
+              <Label htmlFor="workspace-path">Target Workspace (optional)</Label>
+              <Input
+                id="workspace-path"
+                type="text"
+                placeholder="/absolute/path/to/existing/project"
+                value={workspacePath}
+                onChange={(e) => setWorkspacePath(e.target.value)}
+                className="mt-1"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Optional: Analyze and modify an existing project at this path.
+              </p>
             </div>
 
             {/* Advanced Settings */}

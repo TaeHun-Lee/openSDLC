@@ -15,11 +15,27 @@ def _strategy_req_agent(
     state: PipelineState,
 ) -> str:
     latest = state["latest_artifacts"]
-    if not latest.get("ValidationReportArtifact"):
-        return (
+    workspace_context = state.get("workspace_context", {})
+    action_type = state.get("pm_action_type", "new")
+    
+    is_retry = False
+    if state["steps_completed"]:
+        last_step = state["steps_completed"][-1]
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+            is_retry = True
+
+    if not is_retry:
+        prompt = (
             "[PMAgent] 아래 User Story를 분석하여 UseCaseModelArtifact를 작성하라.\n\n"
-            f"User Story:\n{state['user_story']}"
+            f"User Story:\n{state['user_story']}\n"
         )
+        if action_type == "modify" and workspace_context:
+            prompt += "\n--- 기존 작업 공간 파일 내용 (참고용) ---\n"
+            for path, content in workspace_context.items():
+                prompt += f"File: {path}\n```\n{content}\n```\n"
+            prompt += "\n주의: 기존 소스 코드의 기술 스택, UI 구조, API 설계를 분석하여 요구사항을 정의하라."
+        return prompt
+
     return (
         "[PMAgent] ValidatorAgent가 아래 사유로 이전 artifact를 반려하였다.\n"
         "해당 사유만 수정하여 개선된 UseCaseModelArtifact를 재작성하라.\n\n"
@@ -42,11 +58,20 @@ def _strategy_validator(
             target_type = step_result["artifact_type"]
             break
     target_yaml = latest.get(target_type, "")
-    return (
+    prompt = (
         f"아래 {target_type}를 검증하고 ValidationReportArtifact를 작성하라.\n"
         "이 artifact 외의 정보(이전 agent의 사고 과정 등)는 참조하지 말 것.\n\n"
         f"{target_type}:\n{target_yaml}"
     )
+    
+    # If validating ImplementationArtifact, also provide the code context
+    if target_type.startswith("ImplementationArtifact"):
+        code_context = state.get("latest_code_blocks", {}).get("CodeAgent", "")
+        if code_context:
+            prompt += f"\n\n--- 구현 소스코드 ---\n{code_context}\n"
+            prompt += "\n주의: Search-Replace 프로토콜(SEARCH/REPLACE 마커)이 사용된 경우, 마커의 짝이 맞는지와 구문이 올바른지 반드시 확인하라."
+
+    return prompt
 
 
 def _strategy_input_assembler(
@@ -56,15 +81,54 @@ def _strategy_input_assembler(
 ) -> str:
     """Generic strategy: assemble primary_inputs from latest artifacts."""
     latest = state["latest_artifacts"]
+    action_type = state.get("pm_action_type", "new")
+    workspace_context = state.get("workspace_context", {})
     output_name = agent_config.primary_outputs[0] if agent_config.primary_outputs else "artifact"
-    parts = [f"아래 승인된 artifacts를 기반으로 {output_name}를 작성하라.\n"]
+    
+    is_retry = False
+    if state["steps_completed"]:
+        last_step = state["steps_completed"][-1]
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+            is_retry = True
+
+    parts = []
+    if is_retry:
+        parts.append(f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.")
+        parts.append(f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n")
+        parts.append(f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n")
+        parts.append(f"이전 {output_name}:\n{latest.get(output_name, '')}\n")
+        parts.append("--- 참조 산출물 ---")
+    else:
+        parts.append(f"아래 승인된 artifacts를 기반으로 {output_name}를 작성하라.\n")
+        if action_type == "modify":
+            parts.append(f"주의: 이번 작업은 기존 코드를 수정하는 '{action_type}' 방식이다. 기존 파일 내용을 참고하여 필요한 부분만 수정하거나 추가하라.\n")
+
     for input_name in agent_config.primary_inputs:
-        if input_name in latest and latest[input_name]:
-            parts.append(f"{input_name}:\n{latest[input_name]}\n")
-    if len(parts) == 1:
+        actual_key = input_name
+        if input_name not in latest:
+            for k in latest.keys():
+                if input_name.startswith(k):
+                    actual_key = k
+                    break
+                    
+        # Don't duplicate ValidationReportArtifact if we already added it for rework
+        if actual_key == "ValidationReportArtifact" and is_retry:
+            continue
+            
+        if actual_key in latest and latest[actual_key]:
+            parts.append(f"{input_name}:\n{latest[actual_key]}\n")
+            
+    if len(parts) == 1 and not is_retry:
         for atype, ayaml in latest.items():
             if ayaml:
                 parts.append(f"{atype}:\n{ayaml}\n")
+
+    # If in modify mode, inject existing workspace files as context for CodeAgent
+    if step.agent == "CodeAgent" and action_type == "modify" and workspace_context:
+        parts.append("\n--- 기존 작업 공간 파일 내용 ---")
+        for path, content in workspace_context.items():
+            parts.append(f"File: {path}\n```\n{content}\n```\n")
+                
     return "\n".join(parts)
 
 
@@ -75,20 +139,49 @@ def _strategy_test_agent(
 ) -> str:
     latest = state["latest_artifacts"]
     mode = step.mode or "design"
+    output_name = "TestDesignArtifact" if mode == "design" else "TestReportArtifact"
+
+    is_retry = False
+    if state["steps_completed"]:
+        last_step = state["steps_completed"][-1]
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+            is_retry = True
+
     if mode == "design":
+        if is_retry:
+            return (
+                f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.\n"
+                f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n\n"
+                f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n\n"
+                f"이전 {output_name}:\n{latest.get(output_name, '')}\n\n"
+                f"UseCaseModelArtifact:\n{latest.get('UseCaseModelArtifact', '')}"
+            )
         return (
             "아래 UseCaseModelArtifact를 기반으로 TestDesignArtifact를 작성하라.\n\n"
             f"UseCaseModelArtifact:\n{latest.get('UseCaseModelArtifact', '')}"
         )
-    parts = [
-        "아래 artifacts를 기반으로 TestReportArtifact를 작성하라.\n",
+
+    # Execution mode (TestReportArtifact)
+    parts = []
+    if is_retry:
+        parts.append(f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.")
+        parts.append(f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n")
+        parts.append(f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n")
+        parts.append(f"이전 {output_name}:\n{latest.get(output_name, '')}\n")
+        parts.append("--- 참조 산출물 ---")
+    else:
+        parts.append(f"아래 artifacts를 기반으로 {output_name}를 작성하라.\n")
+
+    parts.extend([
         f"TestDesignArtifact:\n{latest.get('TestDesignArtifact', '')}\n",
         f"ImplementationArtifact:\n{latest.get('ImplementationArtifact', '')}\n",
-    ]
+    ])
+
     # Inject source code context from narrative code blocks
     code_context = state.get("latest_code_blocks", {}).get("CodeAgent", "")
     if code_context:
         parts.append(f"--- 구현 소스코드 ---\n{code_context}\n")
+
     return "\n".join(parts)
 
 

@@ -95,6 +95,7 @@ def create_run(
     user_story: str,
     max_iterations: int = 3,
     project_id: str | None = None,
+    workspace_path: str | None = None,
     webhook_url: str | None = None,
     webhook_events: str | None = None,
 ) -> Run:
@@ -105,6 +106,7 @@ def create_run(
         user_story=user_story,
         status="pending",
         max_iterations=max_iterations,
+        workspace_path=workspace_path,
         created_at=time.time(),
         webhook_url=webhook_url,
         webhook_events=webhook_events,
@@ -399,10 +401,21 @@ def list_code_files(
     run_id: str,
     iteration_num: int | None = None,
 ) -> Sequence[CodeFile]:
-    stmt = select(CodeFile).where(CodeFile.run_id == run_id)
+    # 서브쿼리: 각 relative_path별로 가장 최근에 생성된(id가 가장 큰) CodeFile의 id를 찾음
+    subq = (
+        select(func.max(CodeFile.id))
+        .where(CodeFile.run_id == run_id)
+    )
     if iteration_num is not None:
-        stmt = stmt.where(CodeFile.iteration_num == iteration_num)
-    stmt = stmt.order_by(CodeFile.iteration_num, CodeFile.relative_path)
+        subq = subq.where(CodeFile.iteration_num == iteration_num)
+    subq = subq.group_by(CodeFile.relative_path)
+
+    # 메인 쿼리: 위에서 찾은 최신 id들에 해당하는 CodeFile 레코드만 조회
+    stmt = (
+        select(CodeFile)
+        .where(CodeFile.id.in_(subq))
+        .order_by(CodeFile.iteration_num, CodeFile.relative_path)
+    )
     return session.scalars(stmt).all()
 
 

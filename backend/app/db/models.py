@@ -52,6 +52,7 @@ class Run(Base):
     created_at = Column(Float, default=time.time)
     finished_at = Column(Float, nullable=True)
     error = Column(Text, nullable=True)
+    workspace_path = Column(Text, nullable=True)
     webhook_url = Column(Text, nullable=True)
     webhook_events = Column(Text, nullable=True)  # JSON list, e.g. '["completed","failed"]'
 

@@ -138,6 +138,7 @@ class RunDetail(BaseModel):
     status: str
     max_iterations: int
     project_id: str | None = None
+    workspace_path: str | None = None
     created_at: float
     finished_at: float | None = None
     iterations: list[IterationInfo] = Field(default_factory=list)

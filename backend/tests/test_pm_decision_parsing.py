@@ -5,6 +5,7 @@ import pytest
 from app.core.executor.generic_agent import (
     _extract_pm_decision,
     _extract_satisfaction_score,
+    _extract_pm_action_type,
     _strip_markdown_noise,
 )
 
@@ -98,3 +99,42 @@ class TestExtractSatisfactionScore:
 
     def test_not_found_defaults_to_zero(self):
         assert _extract_satisfaction_score("no score") == 0
+
+
+class TestExtractPmActionType:
+    """Test _extract_pm_action_type against common LLM formatting variations."""
+
+    def test_standard_format(self):
+        assert _extract_pm_action_type("PM_ACTION_TYPE: new") == "new"
+        assert _extract_pm_action_type("PM_ACTION_TYPE: modify") == "modify"
+
+    def test_case_insensitive(self):
+        assert _extract_pm_action_type("pm_action_type: NEW") == "new"
+        assert _extract_pm_action_type("Pm_Action_Type: Modify") == "modify"
+
+    def test_equals_separator(self):
+        assert _extract_pm_action_type("PM_ACTION_TYPE = new") == "new"
+
+    def test_dash_separator(self):
+        assert _extract_pm_action_type("PM_ACTION_TYPE - modify") == "modify"
+
+    def test_extra_whitespace(self):
+        assert _extract_pm_action_type("PM_ACTION_TYPE:   new") == "new"
+        assert _extract_pm_action_type("PM_ACTION_TYPE :modify") == "modify"
+
+    def test_quoted_values(self):
+        assert _extract_pm_action_type('PM_ACTION_TYPE: "new"') == "new"
+        assert _extract_pm_action_type("PM_ACTION_TYPE: 'modify'") == "modify"
+
+    def test_markdown_code_block(self):
+        text = "분석 결과:\n```yaml\nPM_ACTION_TYPE: modify\n```"
+        assert _extract_pm_action_type(text) == "modify"
+
+    def test_space_instead_of_underscore(self):
+        assert _extract_pm_action_type("PM ACTION TYPE: new") == "new"
+
+    def test_hyphen_instead_of_underscore(self):
+        assert _extract_pm_action_type("PM-ACTION-TYPE: modify") == "modify"
+
+    def test_not_found_defaults_to_new(self):
+        assert _extract_pm_action_type("no action here") == "new"

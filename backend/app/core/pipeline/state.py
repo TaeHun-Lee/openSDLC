@@ -60,4 +60,6 @@ class PipelineState(TypedDict):
     max_reworks_per_gate: int
     pipeline_status: str
     pm_decision: str                        # PMAgent iteration decision: "continue" | "done" | ""
+    pm_action_type: str                     # PMAgent action decision: "new" | "modify" | ""
     latest_code_blocks: dict[str, str]      # agent_id → code block text (<!-- FILE: --> markers)
+    workspace_context: dict[str, str]       # path → content (existing files in workspace)

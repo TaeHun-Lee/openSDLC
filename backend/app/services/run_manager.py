@@ -64,6 +64,7 @@ class RunRecord:
     finished_at: float | None = None
     final_state: dict | None = None  # PipelineState dict
     error: str | None = None
+    workspace_path: str | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     # Real-time step tracking for progress queries
     current_iteration: int = 1
@@ -310,6 +311,7 @@ class RunManager:
         user_story: str,
         max_iterations: int = 3,
         project_id: str | None = None,
+        workspace_path: str | None = None,
         webhook_url: str | None = None,
         webhook_events: list[str] | None = None,
     ) -> RunRecord:
@@ -332,6 +334,7 @@ class RunManager:
                 user_story=user_story,
                 max_iterations=max_iterations,
                 project_id=project_id,
+                workspace_path=workspace_path,
                 webhook_url=webhook_url,
                 webhook_events=webhook_events_json,
             )
@@ -346,6 +349,7 @@ class RunManager:
             status=RunStatus.PENDING,
             event_bus=EventBus(loop=loop, on_emit=on_emit),
             project_id=project_id,
+            workspace_path=workspace_path,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
         )
@@ -457,11 +461,30 @@ class RunManager:
 
                 # Extract code files for ImplementationArtifact
                 if artifact_type.startswith("ImplementationArtifact") and code_blocks:
-                    workspace_dir = get_runs_dir() / run_id / f"iteration-{iter_num:02d}" / "workspace"
+                    # Check if run has an external workspace_path to write to
+                    record = self._active_runs.get(run_id)
+                    if record and record.workspace_path:
+                        workspace_dir = Path(record.workspace_path)
+                        logger.info(
+                            "Writing code blocks to external workspace_path: %s",
+                            workspace_dir,
+                        )
+                    else:
+                        workspace_dir = (
+                            get_runs_dir()
+                            / run_id
+                            / f"iteration-{iter_num:02d}"
+                            / "workspace"
+                        )
+
                     written = write_code_blocks(code_blocks, workspace_dir)
                     with self._session_factory() as session:
                         for fpath in written:
-                            rel = str(fpath.relative_to(workspace_dir))
+                            try:
+                                rel = str(fpath.relative_to(workspace_dir))
+                            except ValueError:
+                                # Fallback if relative_to fails for some reason
+                                rel = fpath.name
                             repo.insert_code_file(
                                 session,
                                 run_id=run_id,
@@ -533,7 +556,7 @@ class RunManager:
                 ):
                     if is_resume and restored_state is not None:
                         return resume_pipeline(pipeline_def, restored_state)
-                    return run_pipeline(pipeline_def, record.user_story)
+                    return run_pipeline(pipeline_def, record.user_story, workspace_path=record.workspace_path)
 
             try:
                 final_state = await asyncio.to_thread(_run_sync)
