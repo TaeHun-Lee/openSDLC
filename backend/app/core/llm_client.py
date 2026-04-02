@@ -55,8 +55,18 @@ def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int)
         messages=[{"role": "user", "content": user_message}],
     )
     usage = response.usage
+    content_block = response.content[0]
+    text = getattr(content_block, "text", None)
+    if text is None:
+        logger.warning(
+            "[LLM] Anthropic API returned non-text content block (model=%s, type=%s)",
+            model,
+            getattr(content_block, "type", "unknown"),
+        )
+        text = ""
+
     return LLMResponse(
-        text=response.content[0].text,
+        text=text,
         model=model,
         provider="anthropic",
         input_tokens=getattr(usage, "input_tokens", None),
@@ -67,6 +77,24 @@ def _call_anthropic(system: str, user_message: str, model: str, max_tokens: int)
 
 
 _google_cache_store: dict[str, str] = {}
+
+
+def _extract_google_text(response, model: str) -> str:
+    """Google API 응답에서 텍스트를 안전하게 추출한다."""
+    text = response.text
+    if text is None:
+        # 진단 정보 수집
+        finish_reason = "unknown"
+        if response.candidates:
+            finish_reason = getattr(response.candidates[0], "finish_reason", "unknown")
+        logger.warning(
+            "[LLM] Google API returned None text (model=%s, finish_reason=%s). "
+            "Possible causes: safety filter, empty response, non-text content.",
+            model,
+            finish_reason,
+        )
+        text = ""
+    return text
 
 
 def _call_google(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
@@ -91,7 +119,7 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
             usage = response.usage_metadata
             cache_read = getattr(usage, "cached_content_token_count", 0) or 0
             return LLMResponse(
-                text=response.text,
+                text=_extract_google_text(response, model),
                 model=model,
                 provider="google",
                 input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
@@ -123,7 +151,7 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
         usage = response.usage_metadata
         cache_creation = getattr(usage, "cached_content_token_count", 0) or 0
         return LLMResponse(
-            text=response.text,
+            text=_extract_google_text(response, model),
             model=model,
             provider="google",
             input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
@@ -143,7 +171,7 @@ def _call_google(system: str, user_message: str, model: str, max_tokens: int) ->
     )
     usage = response.usage_metadata
     return LLMResponse(
-        text=response.text,
+        text=_extract_google_text(response, model),
         model=model,
         provider="google",
         input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
@@ -164,8 +192,17 @@ def _call_openai(system: str, user_message: str, model: str, max_tokens: int) ->
         ],
     )
     usage = response.usage
+    text = response.choices[0].message.content
+    if text is None:
+        logger.warning(
+            "[LLM] OpenAI API returned None content (model=%s, finish_reason=%s)",
+            model,
+            response.choices[0].finish_reason,
+        )
+        text = ""
+
     return LLMResponse(
-        text=response.choices[0].message.content,
+        text=text,
         model=model,
         provider="openai",
         input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
@@ -302,9 +339,11 @@ def call_llm(
             cache_info = f", cache_read={response.cache_read_tokens}"
         elif response.cache_creation_tokens:
             cache_info = f", cache_created={response.cache_creation_tokens}"
+        
+        response_text = response.text or ""
         logger.info(
             "[LLM] response — %d chars (in=%s, out=%s tokens%s)",
-            len(response.text),
+            len(response_text),
             response.input_tokens,
             response.output_tokens,
             cache_info,

@@ -142,7 +142,7 @@ class RunManager:
             steps_completed: list[StepResult] = []
             latest_artifacts: dict[str, str] = {}
             last_iteration = 1
-            last_rework_count = 0
+            last_rework_counts: dict[int, int] = {}
             pm_decision = ""
 
             for db_step in db_steps:
@@ -193,10 +193,12 @@ class RunManager:
                 last_iteration = max(last_iteration, db_step.iteration_num)
 
                 # Track rework state
-                if db_step.verdict in ("fail", "warning"):
-                    last_rework_count += 1
-                elif db_step.verdict == "pass":
-                    last_rework_count = 0
+                if db_step.agent_name == "ValidatorAgent":
+                    gate_key = db_step.step_num
+                    if db_step.verdict == "fail":
+                        last_rework_counts[gate_key] = last_rework_counts.get(gate_key, 0) + 1
+                    elif db_step.verdict == "pass":
+                        last_rework_counts[gate_key] = 0
 
             # Determine pm_decision from the last PMAgent step's actual verdict
             for sr in reversed(steps_completed):
@@ -225,10 +227,20 @@ class RunManager:
                 "current_step_index": 0,
                 "iteration_count": last_iteration,
                 "max_iterations": db_run.max_iterations or 3,
-                "rework_count": last_rework_count,
+                "rework_counts": last_rework_counts,
                 "max_reworks_per_gate": max_reworks,
                 "pipeline_status": "running",
                 "pm_decision": pm_decision,
+                "pm_action_type": "new",
+                "latest_code_blocks": {},
+                "workspace_context": {},
+                "workspace_root": str(Path(db_run.workspace_path).resolve()) if db_run.workspace_path else "",
+                "workspace_root_name": Path(db_run.workspace_path).resolve().name if db_run.workspace_path else "",
+                "workspace_mode": "external_project_root" if db_run.workspace_path else "internal_run_workspace",
+                "termination_reason": "normal",
+                "termination_source_step": None,
+                "termination_source_agent": "",
+                "latest_validation_result": "",
             }
             return state
 
@@ -436,31 +448,47 @@ class RunManager:
         def _artifact_saver(
             iter_num: int,
             agent_id: str,
-            artifact_type: str,
-            artifact_yaml: str,
+            output_name: str,
+            artifact_yaml: str | None = None,
+            report_body: str | None = None,
             code_blocks: list[dict[str, str]] | None = None,
         ) -> None:
-            """Save artifact YAML to disk and DB immediately after step completion."""
+            """Save artifact/report output to disk and DB immediately after step completion."""
             step_num_in_iter = step_counter_per_iter.get(iter_num, 1)
             try:
-                artifact_id = extract_artifact_id(artifact_yaml)
-                file_path = self._save_artifact_file(
-                    run_id, iter_num, step_num_in_iter, artifact_type, artifact_yaml,
-                )
-                with self._session_factory() as session:
-                    repo.insert_artifact(
-                        session,
-                        run_id=run_id,
-                        iteration_num=iter_num,
-                        step_num=step_num_in_iter,
-                        agent_name=agent_id,
-                        artifact_type=artifact_type,
-                        artifact_id=artifact_id,
-                        file_path=str(file_path),
+                if artifact_yaml:
+                    artifact_id = extract_artifact_id(artifact_yaml)
+                    file_path = self._save_artifact_file(
+                        run_id, iter_num, step_num_in_iter, output_name, artifact_yaml,
                     )
+                    with self._session_factory() as session:
+                        repo.insert_artifact(
+                            session,
+                            run_id=run_id,
+                            iteration_num=iter_num,
+                            step_num=step_num_in_iter,
+                            agent_name=agent_id,
+                            artifact_type=output_name,
+                            artifact_id=artifact_id,
+                            file_path=str(file_path),
+                        )
+                elif report_body is not None:
+                    file_path = self._save_report_file(run_id, iter_num, step_num_in_iter, output_name, report_body)
+                    # report도 artifacts 테이블에 기록하여 API로 조회 가능하게 한다
+                    with self._session_factory() as session:
+                        repo.insert_artifact(
+                            session,
+                            run_id=run_id,
+                            iteration_num=iter_num,
+                            step_num=step_num_in_iter,
+                            agent_name=agent_id,
+                            artifact_type=output_name,
+                            artifact_id=None,
+                            file_path=str(file_path),
+                        )
 
                 # Extract code files for ImplementationArtifact
-                if artifact_type.startswith("ImplementationArtifact") and code_blocks:
+                if output_name.startswith("ImplementationArtifact") and code_blocks:
                     # Check if run has an external workspace_path to write to
                     record = self._active_runs.get(run_id)
                     if record and record.workspace_path:
@@ -477,7 +505,12 @@ class RunManager:
                             / "workspace"
                         )
 
-                    written = write_code_blocks(code_blocks, workspace_dir)
+                    written = write_code_blocks(
+                        code_blocks,
+                        workspace_dir,
+                        workspace_root_name=workspace_dir.resolve().name if record and record.workspace_path else None,
+                        workspace_mode="external_project_root" if record and record.workspace_path else "internal_run_workspace",
+                    )
                     with self._session_factory() as session:
                         for fpath in written:
                             try:
@@ -743,6 +776,22 @@ class RunManager:
         filename = f"{step_num:03d}_{artifact_type}.yaml"
         file_path = artifact_dir / filename
         file_path.write_text(yaml_content, encoding="utf-8")
+        return file_path
+
+    def _save_report_file(
+        self,
+        run_id: str,
+        iteration_num: int,
+        step_num: int,
+        report_name: str,
+        report_body: str,
+    ) -> Path:
+        """Write markdown report to filesystem, return the path."""
+        report_dir = get_runs_dir() / run_id / f"iteration-{iteration_num:02d}" / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        filename = report_name or f"{step_num:03d}_report.md"
+        file_path = report_dir / filename
+        file_path.write_text(report_body, encoding="utf-8")
         return file_path
 
     def _persist_events(self, session: Session, record: RunRecord) -> None:

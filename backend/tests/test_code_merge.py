@@ -1,7 +1,7 @@
 import pytest
 import re
 from pathlib import Path
-from app.core.artifacts.code_extractor import apply_search_replace, write_code_blocks
+from app.core.artifacts.code_extractor import apply_search_replace, normalize_code_path, write_code_blocks
 
 def test_apply_search_replace_basic():
     original = "line1\nline2\nline3\n"
@@ -66,3 +66,42 @@ def test_merge_code_blocks_new_file():
     assert "app.py" in merged
     assert "new.py" in merged
     assert "print('new')" in merged
+
+
+def test_normalize_code_path_strips_external_workspace_slug():
+    assert normalize_code_path(
+        "test-server/server.js",
+        workspace_root_name="test-server",
+        workspace_mode="external_project_root",
+    ) == "server.js"
+    assert normalize_code_path(
+        "workspace/test-server/server.js",
+        workspace_root_name="test-server",
+        workspace_mode="external_project_root",
+    ) == "server.js"
+
+
+def test_normalize_code_path_rejects_absolute_and_traversal():
+    with pytest.raises(ValueError, match="Absolute paths"):
+        normalize_code_path("/tmp/server.js")
+    with pytest.raises(ValueError, match="Path traversal"):
+        normalize_code_path("../server.js")
+
+
+def test_write_code_blocks_normalizes_external_workspace_paths(tmp_path):
+    workspace = tmp_path / "test-server"
+    workspace.mkdir()
+    code_blocks = [{
+        "path": "test-server/server.js",
+        "content": "console.log('ok')\n",
+    }]
+
+    write_code_blocks(
+        code_blocks,
+        workspace,
+        workspace_root_name="test-server",
+        workspace_mode="external_project_root",
+    )
+
+    assert (workspace / "server.js").read_text(encoding="utf-8") == "console.log('ok')\n"
+    assert not (workspace / "test-server" / "server.js").exists()

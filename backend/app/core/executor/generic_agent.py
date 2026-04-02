@@ -14,12 +14,14 @@ from app.core.prompts.builder import build_system_prompt
 from app.core.prompts.message_strategies import build_user_message
 from app.core.llm_client import call_llm
 from app.core.artifacts.parser import (
-    split_narrative_and_yaml,
     parse_artifact,
+    parse_artifact_checked,
+    parse_step_output,
     get_validation_result,
     extract_code_blocks_from_narrative,
     strip_code_blocks_from_narrative,
 )
+from app.core.artifacts.code_extractor import merge_code_blocks
 from app.core.reporting.event_parser import parse_reporting_events
 from app.core.pipeline.state import PipelineState, StepResult
 from app.services.event_bus import EventType, RunEvent
@@ -50,6 +52,20 @@ _PM_ACTION_TYPE_RE = re.compile(
 )
 
 
+def _resolve_output_mode(agent_config: AgentConfig, step: StepDefinition) -> str:
+    """Resolve the runtime output mode for this step."""
+    if step.output_mode:
+        return step.output_mode
+    artifact_outputs = [o for o in agent_config.primary_outputs if o.endswith("Artifact")]
+    if artifact_outputs:
+        return "yaml_artifact"
+    if step.report_template and step.on_next_iteration:
+        return "markdown_report"
+    if step.agent == "PMAgent":
+        return "narrative_only"
+    return "yaml_artifact"
+
+
 def _resolve_output_type(agent_config: AgentConfig, step: StepDefinition) -> str:
     """Determine the artifact type this step produces from config."""
     artifact_outputs = [o for o in agent_config.primary_outputs if o.endswith("Artifact")]
@@ -65,6 +81,13 @@ def _resolve_output_type(agent_config: AgentConfig, step: StepDefinition) -> str
         return agent_config.primary_outputs[0]
 
     return "UnknownArtifact"
+
+
+def _resolve_report_name(step: StepDefinition, state: PipelineState) -> str:
+    """Resolve concrete report filename for markdown-report steps."""
+    if not step.report_template:
+        return ""
+    return step.report_template.replace("{{iteration}}", f"{state['iteration_count']:02d}")
 
 
 def _format_narrative(narrative: str, agent_id: str) -> str:
@@ -87,6 +110,14 @@ def _format_narrative(narrative: str, agent_id: str) -> str:
 
 
 _MIN_FAILURE_CANDIDATES = 3
+
+
+def _current_gate_rework_count(state: PipelineState, step: StepDefinition) -> int:
+    """Get the rework count for the most recent validator gate relevant to this step."""
+    rework_counts = state.get("rework_counts", {})
+    if step.agent == "ValidatorAgent":
+        return rework_counts.get(step.step, 0)
+    return max(rework_counts.values(), default=0)
 
 
 def enforce_adversarial_mandate(
@@ -171,7 +202,7 @@ def _try_replay(step: StepDefinition, state: PipelineState) -> dict | None:
         next_sr["agent_id"] != step.agent
         or next_sr.get("step_num") != step.step
         or next_sr.get("iteration_num") != state["iteration_count"]
-        or next_sr.get("rework_seq", 0) != state["rework_count"]
+        or next_sr.get("rework_seq", 0) != _current_gate_rework_count(state, step)
     ):
         return None
 
@@ -187,18 +218,22 @@ def _try_replay(step: StepDefinition, state: PipelineState) -> dict | None:
 
     new_steps = [*state["steps_completed"], sr]
 
-    new_rework = state["rework_count"]
+    new_rework_counts = {**state.get("rework_counts", {})}
     if step.agent == "ValidatorAgent":
+        gate_key = step.step
+        current_gate_count = new_rework_counts.get(gate_key, 0)
         vr = sr.get("validation_result")
-        if vr in ("fail", "warning"):
-            new_rework += 1
+        if vr == "fail":
+            new_rework_counts[gate_key] = current_gate_count + 1
+        elif vr == "warning":
+            new_rework_counts[gate_key] = current_gate_count
         elif vr == "pass":
-            new_rework = 0
+            new_rework_counts[gate_key] = 0
 
     state_update: dict = {
         "steps_completed": new_steps,
         "latest_artifacts": new_latest,
-        "rework_count": new_rework,
+        "rework_counts": new_rework_counts,
     }
 
     # PMAgent iteration decision — infer from remaining queue
@@ -208,7 +243,7 @@ def _try_replay(step: StepDefinition, state: PipelineState) -> dict | None:
         if has_next:
             state_update["pm_decision"] = "continue"
             state_update["iteration_count"] = current_iter + 1
-            state_update["rework_count"] = 0
+            state_update["rework_counts"] = {}
         else:
             state_update["pm_decision"] = "done"
 
@@ -288,6 +323,7 @@ def create_agent_node(
     agent_config = get_agent(step.agent)
     system_prompt = build_system_prompt(agent_config, step)
     step_node_id = f"step_{step.step}_{step.agent}"
+    output_mode = _resolve_output_mode(agent_config, step)
     output_type = _resolve_output_type(agent_config, step)
 
     def node_fn(state: PipelineState) -> dict:
@@ -301,7 +337,7 @@ def create_agent_node(
         if replay_update is not None:
             logger.info(
                 "[%s] Step %d replayed from resume state (iteration %d, rework %d)",
-                step.agent, step.step, state["iteration_count"], state["rework_count"],
+                step.agent, step.step, state["iteration_count"], _current_gate_rework_count(state, step),
             )
             return replay_update
         # Past the replay point — clear queue so subsequent nodes don't check
@@ -310,6 +346,8 @@ def create_agent_node(
         resolved_output_type = output_type.replace(
             "{NN}", f"{state['iteration_count']:02d}"
         )
+        resolved_output_mode = output_mode
+        resolved_report_name = _resolve_report_name(step, state)
 
         user_message = build_user_message(agent_config, step, state)
 
@@ -326,9 +364,9 @@ def create_agent_node(
                 "step_num": step.step,
                 "agent_id": step.agent,
                 "iteration_num": state["iteration_count"],
-                "rework_seq": state["rework_count"],
+                "rework_seq": _current_gate_rework_count(state, step),
                 "input_artifacts": input_artifact_types,
-                "expected_output": resolved_output_type,
+                "expected_output": resolved_report_name or resolved_output_type,
                 "mode": step.mode,
                 "message": f"[{step.agent}] Step {step.step} started",
             },
@@ -345,19 +383,27 @@ def create_agent_node(
         )
         finished_at = time.time()
 
-        narrative, artifact_yaml = split_narrative_and_yaml(response.text)
+        parsed = parse_step_output(response.text, output_mode=resolved_output_mode)
+        narrative = parsed["narrative"]
+        artifact_yaml = parsed["artifact_yaml"]
+        report_body = parsed["report_body"]
 
         # Extract code blocks from narrative (for ImplementationArtifact)
         code_blocks: list[dict[str, str]] = []
-        if resolved_output_type.startswith("ImplementationArtifact"):
+        if resolved_output_mode == "yaml_artifact" and resolved_output_type.startswith("ImplementationArtifact"):
             code_blocks = extract_code_blocks_from_narrative(narrative)
             if code_blocks:
                 logger.info(
                     "[%s] Extracted %d code blocks from narrative",
                     step.agent, len(code_blocks),
                 )
-            # Strip code blocks from narrative for logging/events
+
+        if resolved_output_mode == "yaml_artifact":
             narrative = strip_code_blocks_from_narrative(narrative)
+        elif resolved_output_mode == "markdown_report" and report_body:
+            # 비어있지 않은 줄 중 처음 5줄을 요약으로 사용 (기존 3줄 → 5줄)
+            summary_lines = [line.strip() for line in report_body.splitlines() if line.strip()][:5]
+            narrative = "\n".join(summary_lines)
 
         # Terminal logging + narrative event
         if narrative:
@@ -369,12 +415,12 @@ def create_agent_node(
                     "agent_id": step.agent,
                     "step_num": step.step,
                     "iteration_num": state["iteration_count"],
-                    "rework_seq": state["rework_count"],
+                    "rework_seq": _current_gate_rework_count(state, step),
                     "message": formatted,
                 },
             ))
         else:
-            print(f"\n[{step.agent}] Step {step.step} ({resolved_output_type})")
+            print(f"\n[{step.agent}] Step {step.step} ({resolved_report_name or resolved_output_type})")
 
         reporting_events = parse_reporting_events(narrative)
         for event in reporting_events:
@@ -386,6 +432,7 @@ def create_agent_node(
             )
 
         validation_result: str | None = None
+        structural_issues: list[str] = []
         if step.agent == "ValidatorAgent":
             report_dict = None
             try:
@@ -414,14 +461,14 @@ def create_agent_node(
                     "agent_id": step.agent,
                     "step_num": step.step,
                     "iteration_num": state["iteration_count"],
-                    "rework_seq": state["rework_count"],
+                    "rework_seq": _current_gate_rework_count(state, step),
                     "message": f"[{step.agent}] Verdict: {verdict_symbol}",
                 },
             ))
 
             # Emit rework trigger event when validation fails and rework target exists
-            if validation_result in ("fail", "warning") and step.on_fail:
-                rework_seq = state["rework_count"] + 1
+            if validation_result == "fail" and step.on_fail:
+                rework_seq = _current_gate_rework_count(state, step) + 1
                 _emit(RunEvent(
                     event_type=EventType.REWORK_TRIGGERED,
                     data={
@@ -436,12 +483,26 @@ def create_agent_node(
                         ),
                     },
                 ))
+        elif resolved_output_mode == "yaml_artifact":
+            parsed_artifact = parse_artifact_checked(response.text, strict=True)
+            if not parsed_artifact["valid"]:
+                structural_issues = [parsed_artifact["error"]]
+                artifact_yaml = ""
+                _emit(RunEvent(
+                    event_type=EventType.PIPELINE_WARNING,
+                    data={
+                        "agent_id": step.agent,
+                        "step_num": step.step,
+                        "iteration_num": state["iteration_count"],
+                        "message": f"[{step.agent}] Output rejected by structural validation: {parsed_artifact['error']}",
+                    },
+                ))
 
         step_result = StepResult(
             step_id=step_node_id,
             agent_id=step.agent,
             artifact_yaml=artifact_yaml,
-            artifact_type=resolved_output_type,
+            artifact_type=resolved_report_name or resolved_output_type,
             model_used=response.model,
             validation_result=validation_result,
             narrative=narrative,
@@ -458,38 +519,55 @@ def create_agent_node(
             # Position
             step_num=step.step,
             iteration_num=state["iteration_count"],
-            rework_seq=state["rework_count"],
+            rework_seq=_current_gate_rework_count(state, step),
         )
+        if structural_issues:
+            step_result["structural_issues"] = structural_issues
+        if report_body:
+            step_result["report_body"] = report_body
 
         # Emit STEP_COMPLETED event directly to EventBus
+        step_completed_data = {
+            "step_num": step.step,
+            "agent_id": step.agent,
+            "iteration_num": state["iteration_count"],
+            "output_artifact": resolved_report_name or resolved_output_type,
+            "model_used": response.model,
+            "provider": response.provider,
+            "input_tokens": response.input_tokens,
+            "output_tokens": response.output_tokens,
+            "cache_read_tokens": response.cache_read_tokens,
+            "cache_creation_tokens": response.cache_creation_tokens,
+            "validation_result": validation_result,
+            "mode": step.mode,
+            "rework_seq": _current_gate_rework_count(state, step),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "message": f"[{step.agent}] Step {step.step} completed",
+        }
+        if report_body:
+            step_completed_data["report_body"] = report_body
+
         _emit(RunEvent(
             event_type=EventType.STEP_COMPLETED,
-            data={
-                "step_num": step.step,
-                "agent_id": step.agent,
-                "iteration_num": state["iteration_count"],
-                "output_artifact": resolved_output_type,
-                "model_used": response.model,
-                "provider": response.provider,
-                "input_tokens": response.input_tokens,
-                "output_tokens": response.output_tokens,
-                "cache_read_tokens": response.cache_read_tokens,
-                "cache_creation_tokens": response.cache_creation_tokens,
-                "validation_result": validation_result,
-                "mode": step.mode,
-                "rework_seq": state["rework_count"],
-                "started_at": started_at,
-                "finished_at": finished_at,
-                "message": f"[{step.agent}] Step {step.step} completed",
-            },
+            data=step_completed_data,
         ))
 
         # Persist artifact to disk immediately (crash-safe)
         saver = get_artifact_saver()
-        if saver and artifact_yaml:
-            saver(state["iteration_count"], step.agent, resolved_output_type, artifact_yaml, code_blocks)
+        if saver and (artifact_yaml or report_body is not None):
+            saver(
+                state["iteration_count"],
+                step.agent,
+                resolved_report_name or resolved_output_type,
+                artifact_yaml if artifact_yaml else None,
+                report_body if report_body else None,
+                code_blocks,
+            )
 
-        new_latest = {**state["latest_artifacts"], resolved_output_type: artifact_yaml}
+        new_latest = {**state["latest_artifacts"]}
+        if artifact_yaml:
+            new_latest[resolved_output_type] = artifact_yaml
         new_steps = [*state["steps_completed"], step_result]
 
         # Update code blocks context for downstream agents (PMAgent, TestAgent)
@@ -499,19 +577,41 @@ def create_agent_node(
             merged_context = merge_code_blocks(prev_context, code_blocks)
             new_code_blocks[step.agent] = merged_context
 
-        new_rework = state["rework_count"]
+        new_rework_counts = {**state.get("rework_counts", {})}
         if step.agent == "ValidatorAgent":
-            if validation_result in ("fail", "warning"):
-                new_rework += 1
+            gate_key = step.step
+            current_gate_count = new_rework_counts.get(gate_key, 0)
+            if validation_result == "fail":
+                new_rework_counts[gate_key] = current_gate_count + 1
+            elif validation_result == "warning":
+                new_rework_counts[gate_key] = current_gate_count
             else:
-                new_rework = 0
+                new_rework_counts[gate_key] = 0
 
         state_update: dict = {
             "steps_completed": new_steps,
             "latest_artifacts": new_latest,
             "latest_code_blocks": new_code_blocks,
-            "rework_count": new_rework,
+            "rework_counts": new_rework_counts,
         }
+        if step.agent == "ValidatorAgent":
+            state_update["latest_validation_result"] = validation_result or ""
+            if validation_result == "warning":
+                state_update["termination_reason"] = "warning_gate"
+                state_update["termination_source_step"] = step.step
+                state_update["termination_source_agent"] = step.agent
+                # Arbiter context: 어떤 agent로 rework/upstream 할지 기록
+                state_update["pm_arbiter_source_gate"] = step.step
+                state_update["termination_rework_target"] = step.on_fail or ""
+                state_update["termination_upstream_target"] = step.upstream_agent or step.on_fail or ""
+            elif validation_result == "fail" and new_rework_counts.get(step.step, 0) >= state["max_reworks_per_gate"]:
+                state_update["termination_reason"] = "max_reworks_exceeded"
+                state_update["termination_source_step"] = step.step
+                state_update["termination_source_agent"] = step.agent
+                # Arbiter context
+                state_update["pm_arbiter_source_gate"] = step.step
+                state_update["termination_rework_target"] = step.on_fail or ""
+                state_update["termination_upstream_target"] = step.upstream_agent or step.on_fail or ""
 
         # PMAgent iteration decision extraction
         if step.agent == "PMAgent":
@@ -537,18 +637,211 @@ def create_agent_node(
                 # Increment iteration_count when continuing
                 if pm_decision == "continue":
                     state_update["iteration_count"] = state["iteration_count"] + 1
-                    # Reset rework counter for new iteration
-                    state_update["rework_count"] = 0
+                    state_update["rework_counts"] = {}
+                    state_update["termination_reason"] = "normal"
+                    state_update["termination_source_step"] = None
+                    state_update["termination_source_agent"] = ""
+                    state_update["latest_validation_result"] = ""
 
         return state_update
 
     node_fn.__name__ = step_node_id
     return node_fn
-tion_count"] + 1
-                    # Reset rework counter for new iteration
-                    state_update["rework_count"] = 0
 
-        return state_update
 
-    node_fn.__name__ = step_node_id
-    return node_fn
+# ---------------------------------------------------------------------------
+# PMAgent Arbiter node — 새 정규식
+# ---------------------------------------------------------------------------
+
+_PM_ARBITER_ACTION_RE = re.compile(
+    r"ARBITER[_\s-]*ACTION\s*[:=\-]\s*[\"']?"
+    r"(retry_producer|retry_upstream|restart_iteration|end_iteration)"
+    r"[\"']?",
+    re.IGNORECASE,
+)
+
+
+def _extract_arbiter_action(text: str) -> str:
+    """Extract ARBITER_ACTION from PMAgent arbiter output.
+
+    Returns one of: retry_producer, retry_upstream, restart_iteration, end_iteration.
+    Defaults to 'end_iteration' if not found.
+    """
+    m = _PM_ARBITER_ACTION_RE.search(text)
+    if m:
+        return m.group(1).lower()
+
+    cleaned = _strip_markdown_noise(text)
+    m = _PM_ARBITER_ACTION_RE.search(cleaned)
+    if m:
+        return m.group(1).lower()
+
+    logger.warning("[PMAgent Arbiter] ARBITER_ACTION not found — defaulting to 'end_iteration'")
+    return "end_iteration"
+
+
+def create_arbiter_node(
+    step: StepDefinition,
+    possible_targets: dict[str, str],
+) -> Callable[[PipelineState], dict]:
+    """Factory: create PMAgent arbiter LangGraph node.
+
+    The arbiter receives context about why a validator gate escalated
+    (warning or max_retries_exceeded), calls LLM to decide the routing
+    action, and writes the target node_id to state for the downstream
+    router to pick up.
+
+    Args:
+        step: StepDefinition for the arbiter (virtual step).
+        possible_targets: dict of node_id → node_id for all valid routing targets.
+    """
+    agent_config = get_agent("PMAgent")
+    system_prompt = build_system_prompt(agent_config, step)
+
+    def arbiter_fn(state: PipelineState) -> dict:
+        cancel = get_cancel_event()
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Run cancelled before PMAgent arbiter")
+
+        user_message = build_user_message(agent_config, step, state)
+
+        _emit(RunEvent(
+            event_type=EventType.STEP_STARTED,
+            data={
+                "step_num": 99,
+                "agent_id": "PMAgent",
+                "iteration_num": state["iteration_count"],
+                "rework_seq": 0,
+                "input_artifacts": [],
+                "expected_output": "arbiter_decision",
+                "mode": "arbiter",
+                "message": "[PMAgent] Arbiter step started",
+            },
+        ))
+
+        started_at = time.time()
+        response = call_llm(
+            system=system_prompt,
+            user_message=user_message,
+            model=step.model,
+            max_tokens=step.max_tokens,
+            min_response_chars=500,
+        )
+        finished_at = time.time()
+
+        narrative = response.text.strip()
+        action = _extract_arbiter_action(narrative)
+
+        # 결정된 action을 target node_id로 매핑
+        target_node: str = ""
+
+        if action == "end_iteration":
+            # pm_assessment_node를 찾는다 — possible_targets에서 PMAgent가 포함된 것
+            for node_id in possible_targets:
+                if "PMAgent" in node_id and node_id != "pm_arbiter":
+                    target_node = node_id
+                    break
+            if not target_node:
+                target_node = "__end__"
+
+        elif action == "restart_iteration":
+            # iteration 시작 node (보통 step_2_ReqAgent)
+            # possible_targets에서 step 번호가 가장 작은 non-PMAgent 찾기
+            import re as _re
+            candidates = []
+            for node_id in possible_targets:
+                m = _re.match(r"step_(\d+)_(.+)", node_id)
+                if m and "PMAgent" not in m.group(2):
+                    candidates.append((int(m.group(1)), node_id))
+            if candidates:
+                candidates.sort()
+                target_node = candidates[0][1]
+
+        elif action == "retry_producer":
+            # termination_source_step의 on_fail agent를 state에서 가져온다
+            target_agent = state.get("termination_rework_target", "")
+            for node_id in possible_targets:
+                if target_agent and target_agent in node_id:
+                    target_node = node_id
+                    break
+
+        elif action == "retry_upstream":
+            target_agent = state.get("termination_upstream_target", "")
+            for node_id in possible_targets:
+                if target_agent and target_agent in node_id:
+                    target_node = node_id
+                    break
+            # upstream이 없으면 producer로 fallback
+            if not target_node:
+                target_agent = state.get("termination_rework_target", "")
+                for node_id in possible_targets:
+                    if target_agent and target_agent in node_id:
+                        target_node = node_id
+                        break
+
+        if not target_node:
+            logger.warning(
+                "[PMAgent Arbiter] Could not resolve target for action=%s — falling back to __end__",
+                action,
+            )
+            target_node = "__end__"
+
+        formatted = _format_narrative(narrative, "PMAgent")
+        print(f"\n{formatted}")
+        print(f"[PMAgent] Arbiter 판정: {action.upper()} → {target_node}")
+
+        _emit(RunEvent(
+            event_type=EventType.AGENT_NARRATIVE,
+            data={
+                "agent_id": "PMAgent",
+                "step_num": 99,
+                "iteration_num": state["iteration_count"],
+                "rework_seq": 0,
+                "message": formatted,
+            },
+        ))
+
+        _emit(RunEvent(
+            event_type=EventType.STEP_COMPLETED,
+            data={
+                "step_num": 99,
+                "agent_id": "PMAgent",
+                "iteration_num": state["iteration_count"],
+                "output_artifact": "arbiter_decision",
+                "model_used": response.model,
+                "provider": response.provider,
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "cache_read_tokens": response.cache_read_tokens,
+                "cache_creation_tokens": response.cache_creation_tokens,
+                "validation_result": None,
+                "mode": "arbiter",
+                "rework_seq": 0,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "message": f"[PMAgent] Arbiter step completed: {action}",
+            },
+        ))
+
+        # rework_counts 리셋 (retry 시 새로운 시도로 취급)
+        new_rework_counts = {**state.get("rework_counts", {})}
+        if action in ("retry_producer", "retry_upstream", "restart_iteration"):
+            if action == "restart_iteration":
+                new_rework_counts = {}  # 전체 리셋
+            else:
+                # 해당 gate의 rework count만 리셋
+                source_gate = state.get("pm_arbiter_source_gate", 0)
+                if source_gate in new_rework_counts:
+                    new_rework_counts[source_gate] = 0
+
+        return {
+            "pm_arbiter_action": action,
+            "pm_arbiter_target_node": target_node,
+            "rework_counts": new_rework_counts,
+            "termination_reason": "normal",  # arbiter가 판단했으므로 리셋
+            "termination_source_step": None,
+            "termination_source_agent": "",
+        }
+
+    arbiter_fn.__name__ = "pm_arbiter"
+    return arbiter_fn

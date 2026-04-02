@@ -12,6 +12,7 @@ from app.core.prompts.loader import (
     load_common_prompt,
     load_constitution_sections,
     load_mandate,
+    load_report_template,
     load_template,
 )
 
@@ -21,16 +22,85 @@ if TYPE_CHECKING:
 _SEPARATOR = "\n\n" + "=" * 60 + "\n\n"
 
 
+def _resolve_output_contract(
+    agent_config: AgentConfig,
+    step: StepDefinition | None,
+) -> dict[str, object]:
+    """Resolve the runtime output contract for a step."""
+    artifact_templates = [o for o in agent_config.primary_outputs if o.endswith("Artifact")]
+    report_template = step.report_template if step else None
+
+    if step and step.output_mode:
+        output_mode = step.output_mode
+    elif artifact_templates:
+        output_mode = "yaml_artifact"
+    elif step and step.report_template and step.on_next_iteration:
+        output_mode = "markdown_report"
+    else:
+        output_mode = "narrative_only" if agent_config.agent_id == "PMAgent" else "yaml_artifact"
+
+    if step and step.mode and len(artifact_templates) > 1:
+        if step.mode == "design":
+            artifact_templates = [t for t in artifact_templates if "Design" in t] or artifact_templates[:1]
+        elif step.mode == "execution":
+            artifact_templates = [t for t in artifact_templates if "Report" in t] or artifact_templates[-1:]
+
+    return {
+        "output_mode": output_mode,
+        "artifact_templates": artifact_templates,
+        "report_template": report_template,
+    }
+
+
+def _apply_output_contract_to_common_prompt(common_prompt: str, output_mode: str) -> str:
+    """Override YAML-only language from AgentCommon at runtime."""
+    replacements = {
+        "- Always produce exactly ONE artifact.": "- Follow the runtime output contract for this step exactly.",
+        "- The artifact must follow the defined YAML schema.": "- If this step emits a YAML artifact, it must follow the defined schema.",
+        "- Do not wrap the YAML in markdown.": "- Emit output in the format required by the runtime output contract.",
+        "- For the final artifact itself, output YAML only.": "- For the final output itself, follow the runtime output contract exactly.",
+    }
+    for old, new in replacements.items():
+        common_prompt = common_prompt.replace(old, new)
+
+    if output_mode == "narrative_only":
+        contract = (
+            "# Runtime Output Contract\n"
+            "This step has output_mode = narrative_only.\n"
+            "- Output narrative only.\n"
+            "- Do not emit YAML artifact bodies.\n"
+            "- Do not wrap structured YAML in markdown fences.\n"
+        )
+    elif output_mode == "markdown_report":
+        contract = (
+            "# Runtime Output Contract\n"
+            "This step has output_mode = markdown_report.\n"
+            "- Output the report body only.\n"
+            "- Follow the attached markdown report template.\n"
+            "- Do not emit YAML artifact bodies.\n"
+        )
+    else:
+        contract = (
+            "# Runtime Output Contract\n"
+            "This step has output_mode = yaml_artifact.\n"
+            "- Output exactly one YAML artifact body.\n"
+            "- Do not include narrative before or after the artifact body.\n"
+        )
+    return f"{common_prompt}{_SEPARATOR}{contract}"
+
+
 def build_system_prompt(
     agent_config: AgentConfig,
     step: StepDefinition | None = None,
 ) -> str:
     """Build system prompt for ANY agent from its config."""
     parts: list[str] = []
+    output_contract = _resolve_output_contract(agent_config, step)
+    output_mode = str(output_contract["output_mode"])
 
     # 1. Base prompts
     parts.append("# OpenSDLC Common Rules")
-    parts.append(load_common_prompt())
+    parts.append(_apply_output_contract_to_common_prompt(load_common_prompt(), output_mode))
     parts.append(_SEPARATOR)
 
     parts.append(f"# {agent_config.agent_id} Role & Instructions")
@@ -57,13 +127,20 @@ def build_system_prompt(
         parts.append(_SEPARATOR)
 
     # 2. Output templates
-    output_templates = _resolve_output_templates(agent_config, step)
+    output_templates = list(output_contract["artifact_templates"])
     for tmpl_name in output_templates:
         parts.append(f"# {tmpl_name} Template (MANDATORY REFERENCE)")
         parts.append(
             "You MUST produce output that strictly matches this template schema:\n"
         )
         parts.append(load_template(tmpl_name))
+        parts.append(_SEPARATOR)
+
+    report_template = output_contract["report_template"]
+    if isinstance(report_template, str) and report_template:
+        parts.append(f"# {report_template} Report Template (MANDATORY REFERENCE)")
+        parts.append("You MUST produce output that strictly matches this report template:\n")
+        parts.append(load_report_template(report_template))
         parts.append(_SEPARATOR)
 
     # 3. Reference templates
@@ -98,19 +175,3 @@ def build_system_prompt(
             parts.append(load_mandate(mandate_filename))
 
     return "\n".join(parts)
-
-
-def _resolve_output_templates(
-    agent_config: AgentConfig,
-    step: StepDefinition | None,
-) -> list[str]:
-    """Determine which output templates an agent should reference."""
-    templates = [o for o in agent_config.primary_outputs if o.endswith("Artifact")]
-
-    if step and step.mode and len(templates) > 1:
-        if step.mode == "design":
-            return [t for t in templates if "Design" in t] or templates[:1]
-        elif step.mode == "execution":
-            return [t for t in templates if "Report" in t] or templates[-1:]
-
-    return templates

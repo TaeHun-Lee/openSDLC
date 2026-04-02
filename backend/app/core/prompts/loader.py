@@ -31,6 +31,15 @@ def load_template(artifact_name: str) -> str:
 
 
 @lru_cache(maxsize=None)
+def load_report_template(report_name: str) -> str:
+    """Load report template from templates/reports/."""
+    path = ENGINE_DIR / "templates" / "reports" / report_name
+    if not path.exists():
+        raise FileNotFoundError(f"Report template not found: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=None)
 def load_constitution_sections(filenames: tuple[str, ...] = ()) -> str:
     """Load selected constitution sections."""
     excerpts: list[str] = []

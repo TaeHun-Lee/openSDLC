@@ -13,33 +13,39 @@ def make_validator_router(step_num: int):
     """Create a routing function for a ValidatorAgent step.
 
     Returns a closure that reads the latest validation result from state.
-    Routes: "pass" | "rework" | "max_retries"
+    Routes: "pass" | "warning" | "rework" | "force_pass"
     """
 
     def route_after_validation(state: PipelineState) -> str:
         latest_step = state["steps_completed"][-1] if state["steps_completed"] else None
         result = latest_step["validation_result"] if latest_step else "fail"
-        rework_count = state["rework_count"]
+        rework_counts = state.get("rework_counts", {})
+        gate_rework_count = rework_counts.get(step_num, 0)
         max_reworks = state["max_reworks_per_gate"]
 
         if result == "pass":
             logger.info("[Router] step %d: validation=pass → next step", step_num)
             return "pass"
 
-        if rework_count >= max_reworks:
+        if result == "warning":
+            logger.warning("[Router] step %d: validation=warning → warning route", step_num)
+            return "warning"
+
+        if gate_rework_count >= max_reworks:
             logger.warning(
-                "[Router] step %d: validation=%s, max_reworks_per_gate=%d reached → END",
+                "[Router] step %d: validation=%s, gate rework=%d/%d reached → force_pass",
                 step_num,
                 result,
+                gate_rework_count,
                 max_reworks,
             )
-            return "max_retries"
+            return "force_pass"
 
         logger.info(
-            "[Router] step %d: validation=%s, rework=%d/%d → rework",
+            "[Router] step %d: validation=%s, gate rework=%d/%d → rework",
             step_num,
             result,
-            rework_count,
+            gate_rework_count,
             max_reworks,
         )
         return "rework"
@@ -86,3 +92,28 @@ def make_pm_iteration_router(step_num: int):
 
     route_after_pm_assessment.__name__ = f"route_pm_step_{step_num}"
     return route_after_pm_assessment
+
+
+def make_arbiter_router():
+    """Create a routing function for the PMAgent arbiter node.
+
+    Reads pm_arbiter_target_node from state, which was set by the arbiter
+    node_fn. Returns the target node_id as the edge key.
+    """
+
+    def route_after_arbiter(state: PipelineState) -> str:
+        target = state.get("pm_arbiter_target_node", "")
+        action = state.get("pm_arbiter_action", "")
+
+        if not target:
+            logger.warning("[Router] Arbiter target not set — routing to __end__")
+            return "__end__"
+
+        logger.info(
+            "[Router] Arbiter action=%s → target=%s",
+            action, target,
+        )
+        return target
+
+    route_after_arbiter.__name__ = "route_pm_arbiter"
+    return route_after_arbiter

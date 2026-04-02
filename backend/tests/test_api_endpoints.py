@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from app.db import repository as repo
+from app.db.session import init_db
+from app.routers.runs import get_artifacts
+from app.services.run_manager import RunManager
 
 
 class TestHealthEndpoint:
@@ -181,3 +186,45 @@ class TestIterationEndpoints:
         assert data["run_id"] == run_id
         assert data["artifacts"] == []
         assert data["code_files"] == []
+
+
+class TestArtifactsEndpoint:
+    def test_get_artifacts_skips_missing_artifact_files(self, tmp_path: Path):
+        sf = init_db(tmp_path / "test.db", run_migrations=False)
+        run_id = "test-missing-artifact-run"
+        now = time.time()
+        missing_artifact_path = tmp_path / "missing-artifact.yaml"
+
+        with sf() as session:
+            repo.create_run(session, run_id, "test-pipe", "test story")
+            repo.update_run_status(session, run_id, "completed", finished_at=now)
+            repo.create_iteration(session, run_id, 1, started_at=now)
+            repo.update_iteration(session, run_id, 1, status="completed", finished_at=now)
+            repo.create_step(session, run_id, 1, 1, "ReqAgent", started_at=now)
+            repo.update_step(
+                session, run_id, 1, 1,
+                verdict="pass", model_used="test-model", provider="google",
+                input_tokens=100, output_tokens=200, finished_at=now,
+            )
+            repo.insert_artifact(
+                session, run_id, 1, 1,
+                agent_name="ReqAgent",
+                artifact_type="UseCaseModelArtifact",
+                artifact_id="REQ-404",
+                file_path=str(missing_artifact_path),
+            )
+
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    session_factory=sf,
+                    run_manager=RunManager(sf),
+                ),
+            ),
+        )
+
+        result = get_artifacts(run_id, request)
+
+        assert result.run_id == run_id
+        assert result.artifacts == []
+        assert result.code_files == []

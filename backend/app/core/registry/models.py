@@ -45,13 +45,18 @@ class StepDefinition(BaseModel):
     model: str | None = None
     provider: str | None = None
     on_fail: str | None = None
+    on_warning: str | None = None
+    on_max_retries: str | None = None
     on_next_iteration: str | None = None    # PMAgent: agent_id to restart iteration
     mode: str | None = None
+    output_mode: str | None = None          # yaml_artifact | markdown_report | narrative_only
+    report_template: str | None = None
     max_tokens: int = 8192
     min_response_chars: int = 1000
     extra_templates: list[str] | None = None
     user_message_strategy: str | None = None  # Override agent config's strategy for this step
     extra_mandate_files: list[str] | None = None  # Additional mandates for this step
+    upstream_agent: str | None = None     # Arbiter routing: retry_upstream 시 대상 (직전 Agent의 직전 Agent)
 
 
 class PipelineDefinition(BaseModel):

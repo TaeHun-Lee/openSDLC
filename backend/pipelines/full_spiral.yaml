@@ -6,6 +6,7 @@ steps:
   - step: 1
     agent: PMAgent
     model: gemini-2.5-flash
+    output_mode: narrative_only
     user_message_strategy: pm_initializer
     extra_mandate_files:
       - "autonomous_pipeline_mandate.md"
@@ -14,29 +15,40 @@ steps:
   - step: 2
     agent: ReqAgent
     model: gemini-2.5-flash
+    output_mode: yaml_artifact
 
   # Step 3: ValidatorAgent (UC) — 요구사항 아티팩트 검증
   - step: 3
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: ReqAgent
+    on_warning: __arbiter__
+    on_max_retries: __arbiter__
+    output_mode: yaml_artifact
+    # upstream_agent 미지정: Gate 3은 최상위이므로 retry_upstream = retry_producer
 
   # Step 4: TestAgent (Design Mode) — 테스트 시나리오 설계 (TestDesignArtifact)
   - step: 4
     agent: TestAgent
     model: gemini-2.5-flash
     mode: design
+    output_mode: yaml_artifact
 
   # Step 5: ValidatorAgent (TEST-DESIGN) — 테스트 설계 검증
   - step: 5
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: TestAgent
+    on_warning: __arbiter__
+    on_max_retries: __arbiter__
+    upstream_agent: ReqAgent
+    output_mode: yaml_artifact
 
   # Step 6: CodeAgent — 기능 구현 및 코드 생성 (ImplementationArtifact)
   - step: 6
     agent: CodeAgent
     model: gemini-2.5-flash
+    output_mode: yaml_artifact
     max_tokens: 16384
     min_response_chars: 2000
 
@@ -45,35 +57,51 @@ steps:
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: CodeAgent
+    on_warning: __arbiter__
+    on_max_retries: __arbiter__
+    upstream_agent: TestAgent
+    output_mode: yaml_artifact
 
   # Step 8: TestAgent (Execution Mode) — 테스트 실행/검증 (TestReportArtifact)
   - step: 8
     agent: TestAgent
     model: gemini-2.5-flash
     mode: execution
+    output_mode: yaml_artifact
 
   # Step 9: ValidatorAgent (TEST-EXECUTION) — 테스트 실행 결과 검증
   - step: 9
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: TestAgent
+    on_warning: __arbiter__
+    on_max_retries: __arbiter__
+    upstream_agent: CodeAgent
+    output_mode: yaml_artifact
 
   # Step 10: CoordAgent — 다음 이터레이션 피드백 (FeedbackArtifact)
   - step: 10
     agent: CoordAgent
     model: gemini-2.5-flash
+    output_mode: yaml_artifact
 
   # Step 11: ValidatorAgent (FB) — 피드백 실행 가능성/일관성 검증
   - step: 11
     agent: ValidatorAgent
     model: gemini-2.5-flash
     on_fail: CoordAgent
+    on_warning: __arbiter__
+    on_max_retries: __arbiter__
+    upstream_agent: TestAgent
+    output_mode: yaml_artifact
 
   # Step 12: PMAgent — 코드 구현체 분석, iteration_assessment 작성, 다음 iteration 판정
   - step: 12
     agent: PMAgent
     model: gemini-2.5-flash
     on_next_iteration: ReqAgent
+    output_mode: markdown_report
+    report_template: iteration_assessment_{{iteration}}.md
     max_tokens: 16384
     min_response_chars: 1500
     user_message_strategy: pm_assessor

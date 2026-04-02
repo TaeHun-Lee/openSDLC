@@ -4,9 +4,54 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.core.prompts.loader import load_template
+
 if TYPE_CHECKING:
     from app.core.registry.models import AgentConfig, StepDefinition
     from app.core.pipeline.state import PipelineState
+
+
+def _build_schema_reminder(
+    agent_config: AgentConfig,
+    step: StepDefinition,
+) -> str:
+    """Append the output schema near the end of the user message."""
+    artifact_outputs = [o for o in agent_config.primary_outputs if o.endswith("Artifact")]
+    if not artifact_outputs:
+        return ""
+
+    if step.mode and len(artifact_outputs) > 1:
+        if step.mode == "design":
+            target = next((o for o in artifact_outputs if "Design" in o), artifact_outputs[0])
+        elif step.mode == "execution":
+            target = next((o for o in artifact_outputs if "Report" in o), artifact_outputs[-1])
+        else:
+            target = artifact_outputs[0]
+    else:
+        target = artifact_outputs[0]
+
+    try:
+        template_text = load_template(target)
+    except FileNotFoundError:
+        return ""
+
+    id_rules = (
+        "\n\nID 명명규칙:\n"
+        "- artifact_id: 아티팩트 유형 약어 + 순번 (예: UC-01, TD-01, IMPL-01, TEST-01, FB-01, VAL-01)\n"
+        "- rework 시 순번을 증가시킨다 (예: TD-01 → TD-02)\n"
+        "- 하위 항목 ID는 상위 artifact_id를 접두사로 사용한다.\n"
+        "- source_artifact_ids, test_scenario_ids 등 참조 필드는 실제 존재하는 ID만 사용하라.\n"
+    )
+
+    return (
+        "\n\n=== 출력 스키마 준수 지침 ===\n"
+        f"반드시 아래 {target} 템플릿의 스키마를 정확히 따라 YAML을 작성하라.\n"
+        "- 모든 필수 필드를 빠짐없이 포함할 것.\n"
+        "- `artifact_id` 필드를 반드시 첫 번째 줄에 포함할 것.\n"
+        "- YAML 코드블록(```yaml ... ```)으로 감싸서 출력할 것.\n"
+        f"{id_rules}\n"
+        f"템플릿:\n```yaml\n{template_text}\n```"
+    )
 
 
 def _strategy_req_agent(
@@ -21,7 +66,7 @@ def _strategy_req_agent(
     is_retry = False
     if state["steps_completed"]:
         last_step = state["steps_completed"][-1]
-        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") in ("fail", "warning"):
             is_retry = True
 
     if not is_retry:
@@ -34,15 +79,17 @@ def _strategy_req_agent(
             for path, content in workspace_context.items():
                 prompt += f"File: {path}\n```\n{content}\n```\n"
             prompt += "\n주의: 기존 소스 코드의 기술 스택, UI 구조, API 설계를 분석하여 요구사항을 정의하라."
-        return prompt
+        return prompt + _build_schema_reminder(agent_config, step)
 
     return (
         "[PMAgent] ValidatorAgent가 아래 사유로 이전 artifact를 반려하였다.\n"
-        "해당 사유만 수정하여 개선된 UseCaseModelArtifact를 재작성하라.\n\n"
+        "ValidationReport의 지적 사항을 반영하여 UseCaseModelArtifact를 처음부터 완전히 새로 작성하라.\n"
+        "이전 artifact를 복사하여 부분 수정하지 마라. 새 artifact를 독립적으로 생성하라.\n"
+        "특히 ID 참조(artifact_id, use_case_ids 등)가 현재 참조 대상의 실제 ID와 정확히 일치하는지 확인하라.\n\n"
         f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n\n"
-        f"이전 UC Artifact:\n{latest.get('UseCaseModelArtifact', '')}\n\n"
+        f"이전 UC Artifact (참조용, 복사 금지):\n{latest.get('UseCaseModelArtifact', '')}\n\n"
         f"원본 User Story:\n{state['user_story']}"
-    )
+    ) + _build_schema_reminder(agent_config, step)
 
 
 def _strategy_validator(
@@ -83,20 +130,27 @@ def _strategy_input_assembler(
     latest = state["latest_artifacts"]
     action_type = state.get("pm_action_type", "new")
     workspace_context = state.get("workspace_context", {})
+    workspace_root = state.get("workspace_root", "")
+    workspace_root_name = state.get("workspace_root_name", "")
+    workspace_mode = state.get("workspace_mode", "internal_run_workspace")
     output_name = agent_config.primary_outputs[0] if agent_config.primary_outputs else "artifact"
     
     is_retry = False
     if state["steps_completed"]:
         last_step = state["steps_completed"][-1]
-        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") in ("fail", "warning"):
             is_retry = True
 
     parts = []
     if is_retry:
         parts.append(f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.")
-        parts.append(f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n")
+        parts.append(f"ValidationReport의 지적 사항을 반영하여 {output_name}를 처음부터 완전히 새로 작성하라.")
+        parts.append("이전 artifact를 복사하여 부분 수정하지 마라. 새 artifact를 독립적으로 생성하라.")
+        parts.append(
+            "특히 ID 참조(artifact_id, source_artifact_ids, test_scenario_ids 등)가 현재 참조 대상의 실제 ID와 정확히 일치하는지 확인하라.\n"
+        )
         parts.append(f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n")
-        parts.append(f"이전 {output_name}:\n{latest.get(output_name, '')}\n")
+        parts.append(f"이전 {output_name} (참조용, 복사 금지):\n{latest.get(output_name, '')}\n")
         parts.append("--- 참조 산출물 ---")
     else:
         parts.append(f"아래 승인된 artifacts를 기반으로 {output_name}를 작성하라.\n")
@@ -125,11 +179,19 @@ def _strategy_input_assembler(
 
     # If in modify mode, inject existing workspace files as context for CodeAgent
     if step.agent == "CodeAgent" and action_type == "modify" and workspace_context:
+        if workspace_mode == "external_project_root" and workspace_root:
+            parts.append(
+                "경로 규칙:\n"
+                f"- 현재 작업의 파일 경로 기준은 external workspace root(`{workspace_root}`)이다.\n"
+                "- 모든 files_changed 및 code block FILE path는 이 root 기준 상대경로만 사용하라.\n"
+                "- 예: `server.js`, `package.json`, `src/index.ts`\n"
+                f"- 금지: `{workspace_root_name}/server.js`, `workspace/{workspace_root_name}/server.js`, 절대경로\n"
+            )
         parts.append("\n--- 기존 작업 공간 파일 내용 ---")
         for path, content in workspace_context.items():
             parts.append(f"File: {path}\n```\n{content}\n```\n")
                 
-    return "\n".join(parts)
+    return "\n".join(parts) + _build_schema_reminder(agent_config, step)
 
 
 def _strategy_test_agent(
@@ -144,30 +206,36 @@ def _strategy_test_agent(
     is_retry = False
     if state["steps_completed"]:
         last_step = state["steps_completed"][-1]
-        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") == "fail":
+        if last_step["agent_id"] == "ValidatorAgent" and last_step.get("validation_result") in ("fail", "warning"):
             is_retry = True
 
     if mode == "design":
         if is_retry:
             return (
                 f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.\n"
-                f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n\n"
+                f"ValidationReport의 지적 사항을 반영하여 {output_name}를 처음부터 완전히 새로 작성하라.\n"
+                f"이전 artifact를 복사하여 부분 수정하지 마라. 새 artifact를 독립적으로 생성하라.\n"
+                f"특히 ID 참조(artifact_id, test_scenario_ids 등)가 현재 참조 대상의 실제 ID와 정확히 일치하는지 확인하라.\n\n"
                 f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n\n"
-                f"이전 {output_name}:\n{latest.get(output_name, '')}\n\n"
+                f"이전 {output_name} (참조용, 복사 금지):\n{latest.get(output_name, '')}\n\n"
                 f"UseCaseModelArtifact:\n{latest.get('UseCaseModelArtifact', '')}"
-            )
+            ) + _build_schema_reminder(agent_config, step)
         return (
             "아래 UseCaseModelArtifact를 기반으로 TestDesignArtifact를 작성하라.\n\n"
             f"UseCaseModelArtifact:\n{latest.get('UseCaseModelArtifact', '')}"
-        )
+        ) + _build_schema_reminder(agent_config, step)
 
     # Execution mode (TestReportArtifact)
     parts = []
     if is_retry:
         parts.append(f"[PMAgent] ValidatorAgent가 아래 사유로 이전 {output_name}를 반려하였다.")
-        parts.append(f"해당 사유만 수정하여 개선된 {output_name}를 재작성하라.\n")
+        parts.append(f"ValidationReport의 지적 사항을 반영하여 {output_name}를 처음부터 완전히 새로 작성하라.")
+        parts.append("이전 artifact를 복사하여 부분 수정하지 마라. 새 artifact를 독립적으로 생성하라.")
+        parts.append(
+            "특히 ID 참조(artifact_id, source_artifact_ids, test_scenario_ids 등)가 현재 참조 대상의 실제 ID와 정확히 일치하는지 확인하라.\n"
+        )
         parts.append(f"ValidationReport:\n{latest.get('ValidationReportArtifact', '')}\n")
-        parts.append(f"이전 {output_name}:\n{latest.get(output_name, '')}\n")
+        parts.append(f"이전 {output_name} (참조용, 복사 금지):\n{latest.get(output_name, '')}\n")
         parts.append("--- 참조 산출물 ---")
     else:
         parts.append(f"아래 artifacts를 기반으로 {output_name}를 작성하라.\n")
@@ -182,7 +250,7 @@ def _strategy_test_agent(
     if code_context:
         parts.append(f"--- 구현 소스코드 ---\n{code_context}\n")
 
-    return "\n".join(parts)
+    return "\n".join(parts) + _build_schema_reminder(agent_config, step)
 
 
 def _strategy_pm_initializer(
@@ -232,6 +300,16 @@ def _strategy_pm_assessor(
         f"iteration_assessment를 작성하고 다음 iteration 실행 여부를 판정하라.\n",
         f"원본 User Story:\n{state['user_story']}\n",
     ]
+
+    termination_reason = state.get("termination_reason", "normal")
+    if termination_reason != "normal":
+        parts.append(
+            "=== 종료/판정 컨텍스트 ===\n"
+            f"- termination_reason: {termination_reason}\n"
+            f"- termination_source_step: {state.get('termination_source_step')}\n"
+            f"- termination_source_agent: {state.get('termination_source_agent', '')}\n"
+            f"- latest_validation_result: {state.get('latest_validation_result', '')}\n"
+        )
 
     # Feed all available artifacts
     artifact_order = [
@@ -289,6 +367,90 @@ def _strategy_pm_assessor(
     return "\n".join(parts)
 
 
+def _strategy_pm_arbiter(
+    agent_config: AgentConfig,
+    step: StepDefinition,
+    state: PipelineState,
+) -> str:
+    """PMAgent arbiter: decide routing after validator escalation.
+
+    Receives the failure/warning context and all current artifacts.
+    Must output ARBITER_ACTION with one of the 4 possible actions.
+    """
+    latest = state["latest_artifacts"]
+    iteration = state["iteration_count"]
+    termination_reason = state.get("termination_reason", "normal")
+    source_step = state.get("termination_source_step", "?")
+    rework_target = state.get("termination_rework_target", "")
+    upstream_target = state.get("termination_upstream_target", "")
+    rework_counts = state.get("rework_counts", {})
+    max_reworks = state["max_reworks_per_gate"]
+
+    parts = [
+        f"Iteration {iteration}에서 ValidatorAgent가 검증 실패/경고를 발생시켰다.\n"
+        f"너는 PMAgent 중재자(Arbiter)로서 다음 행동을 판정해야 한다.\n",
+    ]
+
+    parts.append(
+        "=== 실패 컨텍스트 ===\n"
+        f"- 종료 사유: {termination_reason}\n"
+        f"- 발생 gate (step 번호): {source_step}\n"
+        f"- 직전 작업 Agent (producer): {rework_target}\n"
+        f"- 상위 Agent (upstream): {upstream_target}\n"
+        f"- 현재 rework 횟수: {rework_counts}\n"
+        f"- gate당 최대 rework: {max_reworks}\n"
+    )
+
+    parts.append(f"\n원본 User Story:\n{state['user_story']}\n")
+
+    # 최근 ValidationReport 제공
+    val_report = latest.get("ValidationReportArtifact", "")
+    if val_report:
+        parts.append(f"--- 최근 ValidationReportArtifact ---\n{val_report}\n")
+
+    # 현재까지의 주요 artifacts 요약
+    for atype in ["UseCaseModelArtifact", "ImplementationArtifact", "TestReportArtifact", "FeedbackArtifact"]:
+        content = latest.get(atype, "")
+        if content:
+            # 긴 artifact는 처음 50줄만 전달
+            lines = content.splitlines()
+            if len(lines) > 50:
+                content = "\n".join(lines[:50]) + "\n... (이하 생략)"
+            parts.append(f"--- {atype} (요약) ---\n{content}\n")
+
+    # 코드 context
+    code_context = state.get("latest_code_blocks", {}).get("CodeAgent", "")
+    if code_context:
+        parts.append(f"--- 구현 소스코드 ---\n{code_context}\n")
+
+    parts.append(
+        "\n=== 판정 지침 ===\n"
+        "위 컨텍스트를 분석하여 다음 중 하나의 행동을 선택하라:\n\n"
+        "1. **retry_producer**: 직전 작업 Agent에게 1회 더 재작업을 지시한다.\n"
+        f"   - 대상: {rework_target}\n"
+        "   - 적합한 경우: 검증 실패가 단순 실수이고 같은 Agent가 수정 가능한 경우\n\n"
+        "2. **retry_upstream**: 직전 Agent의 상위 Agent부터 재작업을 시작한다.\n"
+        f"   - 대상: {upstream_target}\n"
+        "   - 적합한 경우: 상위 단계의 산출물(요구사항, 테스트 설계 등)에 근본 원인이 있는 경우\n\n"
+        "3. **restart_iteration**: 현재 Iteration을 ReqAgent부터 완전히 재시작한다.\n"
+        "   - 적합한 경우: 요구사항 해석 자체가 잘못되었거나, 전체적인 방향 수정이 필요한 경우\n\n"
+        "4. **end_iteration**: 현재 상태로 Iteration을 종료하고 최종 평가로 넘긴다.\n"
+        "   - 적합한 경우: 치명적이지 않은 경고이거나, 추가 재작업이 무의미한 경우\n\n"
+        "판정 기준:\n"
+        "- rework 횟수가 이미 최대에 도달했다면 retry_producer는 비효율적이다.\n"
+        "- ValidationReport의 지적 사항이 단순 형식 오류인지, 근본적 설계 결함인지 구분하라.\n"
+        "- restart_iteration은 비용이 크므로 신중히 선택하라.\n"
+        "- 경고(warning)가 치명적이지 않으면 end_iteration이 적절하다.\n\n"
+        "반드시 아래 형식의 판정 블록을 출력 마지막에 포함하라:\n"
+        "```\n"
+        "ARBITER_ACTION: retry_producer\n"
+        "ARBITER_REASON: (판정 사유를 한 줄로 기술)\n"
+        "```\n"
+    )
+
+    return "\n".join(parts)
+
+
 _STRATEGIES: dict[str, callable] = {
     "req_agent": _strategy_req_agent,
     "validator": _strategy_validator,
@@ -296,6 +458,7 @@ _STRATEGIES: dict[str, callable] = {
     "test_agent": _strategy_test_agent,
     "pm_initializer": _strategy_pm_initializer,
     "pm_assessor": _strategy_pm_assessor,
+    "pm_arbiter": _strategy_pm_arbiter,
 }
 
 

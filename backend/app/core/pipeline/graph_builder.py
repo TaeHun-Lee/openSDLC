@@ -31,18 +31,76 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
 
     node_ids: dict[int, str] = {}
     agent_to_node: dict[str, str] = {}
+    pm_assessment_node: str | None = None
 
     for step_def in steps:
         node_id = f"step_{step_def.step}_{step_def.agent}"
         node_ids[step_def.step] = node_id
         if step_def.agent not in agent_to_node:
             agent_to_node[step_def.agent] = node_id
+        if step_def.agent == "PMAgent" and step_def.on_next_iteration:
+            pm_assessment_node = node_id
 
         node_fn = create_agent_node(step_def)
         graph.add_node(node_id, node_fn)
 
+    # Arbiter 노드: warning/max_retries 시 PMAgent가 라우팅 판단
+    # __arbiter__를 사용하는 gate가 하나라도 있으면 생성
+    arbiter_gates = [
+        s for s in steps
+        if s.agent == "ValidatorAgent"
+        and (s.on_warning == "__arbiter__" or s.on_max_retries == "__arbiter__")
+    ]
+    arbiter_node_id: str | None = None
+    arbiter_possible_targets: dict[str, str] = {}  # node_id → node_id (edge key → target)
+
+    if arbiter_gates:
+        from app.core.executor.generic_agent import create_arbiter_node
+
+        # iteration 시작 agent (PMAgent 다음 첫 번째 non-PM agent)
+        iteration_start_node = None
+        for s in steps:
+            if s.agent != "PMAgent":
+                iteration_start_node = node_ids[s.step]
+                break
+
+        # 각 gate별 가능한 target 수집
+        for gate_step in arbiter_gates:
+            producer_node = agent_to_node.get(gate_step.on_fail)
+            if producer_node:
+                arbiter_possible_targets[producer_node] = producer_node
+            if gate_step.upstream_agent:
+                upstream_node = agent_to_node.get(gate_step.upstream_agent)
+                if upstream_node:
+                    arbiter_possible_targets[upstream_node] = upstream_node
+        if iteration_start_node:
+            arbiter_possible_targets[iteration_start_node] = iteration_start_node
+        if pm_assessment_node:
+            arbiter_possible_targets[pm_assessment_node] = pm_assessment_node
+
+        arbiter_step = StepDefinition(
+            step=99,  # 가상 step 번호 (pipeline YAML에 없음)
+            agent="PMAgent",
+            model=steps[0].model,  # 첫 번째 step의 모델 사용
+            output_mode="narrative_only",
+            user_message_strategy="pm_arbiter",
+        )
+        arbiter_node_id = "pm_arbiter"
+        arbiter_node_fn = create_arbiter_node(arbiter_step, arbiter_possible_targets)
+        graph.add_node(arbiter_node_id, arbiter_node_fn)
+
     first_node = node_ids[steps[0].step]
     graph.set_entry_point(first_node)
+
+    # Arbiter의 conditional edges 등록
+    if arbiter_node_id and arbiter_possible_targets:
+        from app.core.pipeline.routing import make_arbiter_router
+
+        arbiter_routing_fn = make_arbiter_router()
+        # edge key = target node_id, value = target node_id
+        arbiter_edges = dict(arbiter_possible_targets)
+        arbiter_edges["__end__"] = END  # fallback: end_iteration이 assessment 없이 종료할 때
+        graph.add_conditional_edges(arbiter_node_id, arbiter_routing_fn, arbiter_edges)
 
     for i, step_def in enumerate(steps):
         current_node = node_ids[step_def.step]
@@ -60,17 +118,33 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
                 )
 
             pass_target = next_node if next_node else END
+
+            # warning 라우팅 대상 결정
+            if step_def.on_warning == "__arbiter__" and arbiter_node_id:
+                warning_target = arbiter_node_id
+            elif not step_def.on_warning:
+                warning_target = pm_assessment_node
+            elif step_def.on_warning == "PMAgent" and pm_assessment_node is not None:
+                warning_target = pm_assessment_node
+            else:
+                warning_target = agent_to_node.get(step_def.on_warning)
+
+            # force_pass (max_retries 초과) 라우팅 대상 결정
+            if step_def.on_max_retries == "__arbiter__" and arbiter_node_id:
+                force_pass_target = arbiter_node_id
+            else:
+                force_pass_target = pass_target
+
             routing_fn = make_validator_router(step_num=step_def.step)
 
-            graph.add_conditional_edges(
-                current_node,
-                routing_fn,
-                {
-                    "pass": pass_target,
-                    "rework": rework_target,
-                    "max_retries": END,
-                },
-            )
+            edges = {
+                "pass": pass_target,
+                "rework": rework_target,
+                "force_pass": force_pass_target,
+            }
+            if warning_target is not None:
+                edges["warning"] = warning_target
+            graph.add_conditional_edges(current_node, routing_fn, edges)
         elif step_def.on_next_iteration:
             # PMAgent: iteration decision conditional routing
             iteration_target = agent_to_node.get(step_def.on_next_iteration)
@@ -115,8 +189,15 @@ def run_pipeline(
 ) -> PipelineState:
     """Execute a dynamic pipeline end-to-end."""
     workspace_context = {}
+    workspace_root = ""
+    workspace_root_name = ""
+    workspace_mode = "internal_run_workspace"
     if workspace_path:
-        workspace_context = scan_workspace(workspace_path)
+        workspace_root_path = Path(workspace_path).resolve()
+        workspace_context = scan_workspace(workspace_root_path)
+        workspace_root = str(workspace_root_path)
+        workspace_root_name = workspace_root_path.name
+        workspace_mode = "external_project_root"
 
     initial_state: PipelineState = {
         "user_story": user_story,
@@ -125,13 +206,26 @@ def run_pipeline(
         "current_step_index": 0,
         "iteration_count": 1,
         "max_iterations": pipeline_def.max_iterations,
-        "rework_count": 0,
+        "rework_counts": {},
         "max_reworks_per_gate": pipeline_def.max_reworks_per_gate,
         "pipeline_status": "running",
         "pm_decision": "",
         "pm_action_type": "",
         "latest_code_blocks": {},
         "workspace_context": workspace_context,
+        "workspace_root": workspace_root,
+        "workspace_root_name": workspace_root_name,
+        "workspace_mode": workspace_mode,
+        "termination_reason": "normal",
+        "termination_source_step": None,
+        "termination_source_agent": "",
+        "latest_validation_result": "",
+        # Arbiter 관련 초기값
+        "pm_arbiter_action": "",
+        "pm_arbiter_target_node": "",
+        "pm_arbiter_source_gate": 0,
+        "termination_rework_target": "",
+        "termination_upstream_target": "",
     }
 
     return _execute_pipeline(pipeline_def, initial_state)
@@ -158,12 +252,24 @@ def resume_pipeline(
     restored_state["steps_completed"] = []
     restored_state["latest_artifacts"] = {}
     restored_state["iteration_count"] = 1
-    restored_state["rework_count"] = 0
+    restored_state["rework_counts"] = {}
     restored_state["pm_decision"] = ""
     restored_state["latest_code_blocks"] = {}
     restored_state["max_iterations"] = pipeline_def.max_iterations
     restored_state["max_reworks_per_gate"] = pipeline_def.max_reworks_per_gate
     restored_state["pipeline_status"] = "running"
+    restored_state.setdefault("workspace_root", "")
+    restored_state.setdefault("workspace_root_name", "")
+    restored_state.setdefault("workspace_mode", "internal_run_workspace")
+    restored_state["termination_reason"] = "normal"
+    restored_state["termination_source_step"] = None
+    restored_state["termination_source_agent"] = ""
+    restored_state["latest_validation_result"] = ""
+    restored_state.setdefault("pm_arbiter_action", "")
+    restored_state.setdefault("pm_arbiter_target_node", "")
+    restored_state.setdefault("pm_arbiter_source_gate", 0)
+    restored_state.setdefault("termination_rework_target", "")
+    restored_state.setdefault("termination_upstream_target", "")
 
     try:
         return _execute_pipeline(pipeline_def, restored_state, is_resume=True)
@@ -212,7 +318,8 @@ def _execute_pipeline(
         initial_state["pipeline_status"] = f"error: {type(exc).__name__}"
         return initial_state
 
-    if final_state["rework_count"] >= pipeline_def.max_reworks_per_gate:
+    rework_counts = final_state.get("rework_counts", {})
+    if any(v >= pipeline_def.max_reworks_per_gate for v in rework_counts.values()):
         final_state["pipeline_status"] = "max_reworks_exceeded"
     else:
         final_state["pipeline_status"] = "completed"

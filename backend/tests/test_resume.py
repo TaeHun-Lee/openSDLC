@@ -16,7 +16,7 @@ from app.services.run_manager import RunManager, RunStatus
 @pytest.fixture()
 def db_with_failed_run(tmp_path: Path):
     """Create a DB with a failed run that has completed steps and artifacts."""
-    sf = init_db(tmp_path / "test.db")
+    sf = init_db(tmp_path / "test.db", run_migrations=False)
     run_id = "test-resume-run-001"
     pipeline_name = "poc_classic"
 
@@ -144,14 +144,14 @@ class TestRestorePipelineState:
         assert state["iteration_count"] == 1
         assert state["pipeline_status"] == "running"
 
-    def test_rework_count_reset_after_pass(self, db_with_failed_run):
+    def test_rework_counts_reset_after_pass(self, db_with_failed_run):
         sf, run_id, tmp_path = db_with_failed_run
         manager = RunManager(sf)
 
         state = manager._restore_pipeline_state(run_id)
 
-        # After a pass verdict, rework_count should be 0
-        assert state["rework_count"] == 0
+        # After a pass verdict, the validator gate's rework count should be 0
+        assert state["rework_counts"].get(2, 0) == 0
 
     def test_nonexistent_run_raises(self, db_with_failed_run):
         sf, _, _ = db_with_failed_run
@@ -159,6 +159,56 @@ class TestRestorePipelineState:
 
         with pytest.raises(ValueError, match="not found"):
             manager._restore_pipeline_state("nonexistent-id")
+
+    def test_uses_updated_max_reworks_from_current_pipeline_definition(self, tmp_path: Path):
+        sf = init_db(tmp_path / "test.db", run_migrations=False)
+        pipeline_path = tmp_path / "resume-pipeline.yaml"
+        pipeline_path.write_text(
+            "\n".join([
+                "name: resume-pipeline",
+                "max_iterations: 3",
+                "max_reworks_per_gate: 3",
+                "steps:",
+                "  - step: 1",
+                "    agent: ReqAgent",
+                "  - step: 2",
+                "    agent: ValidatorAgent",
+                "    on_fail: ReqAgent",
+            ]),
+            encoding="utf-8",
+        )
+
+        run_id = "test-resume-updated-max-reworks"
+        now = time.time()
+        with sf() as session:
+            repo.create_run(
+                session,
+                run_id=run_id,
+                pipeline_name=str(pipeline_path),
+                user_story="resume test",
+                max_iterations=3,
+            )
+            repo.update_run_status(session, run_id, "failed", error="interrupted")
+            repo.create_iteration(session, run_id, iteration_num=1, started_at=now)
+            repo.create_step(session, run_id, 1, 1, "ReqAgent", started_at=now)
+            repo.update_step(
+                session, run_id, 1, 1,
+                verdict=None, model_used="gemini-2.5-flash", provider="google",
+                input_tokens=10, output_tokens=20, finished_at=now,
+            )
+
+        pipeline_path.write_text(
+            pipeline_path.read_text(encoding="utf-8").replace(
+                "max_reworks_per_gate: 3",
+                "max_reworks_per_gate: 1",
+            ),
+            encoding="utf-8",
+        )
+
+        manager = RunManager(sf)
+        state = manager._restore_pipeline_state(run_id)
+
+        assert state["max_reworks_per_gate"] == 1
 
 
 class TestResumeRunValidation:

@@ -5,6 +5,12 @@ OpenSDLC 방법론을 코드로 구현하는 과정에서 일관성, 품질, 그
 
 ---
 
+### 가상환경 활성화 (필수)
+```bash
+source ~/opensdlc-venv/bin/activate
+```
+> **모든 CLI/테스트/서버 실행 전에 반드시 가상환경을 활성화해야 한다.**
+
 ## 1. 프로젝트 개요
 
 OpenSDLC는 소프트웨어 개발 생명주기(SDLC)의 각 단계를 담당하는 AI Agent들이 구조화된 YAML 아티팩트를 통해 협업하는 **AI Software Factory** 플랫폼이다.

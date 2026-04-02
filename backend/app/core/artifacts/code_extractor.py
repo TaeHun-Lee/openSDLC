@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -125,9 +126,43 @@ def _strip_workspace_prefix(rel_path: str) -> str:
     return rel_path
 
 
+def normalize_code_path(
+    raw_path: str,
+    workspace_root_name: str | None = None,
+    workspace_mode: str = "internal_run_workspace",
+) -> str:
+    """Normalize a model-emitted code path into workspace-root-relative form."""
+    normalized = raw_path.replace("\\", "/").strip()
+    normalized = _strip_workspace_prefix(normalized).lstrip("/")
+    if not normalized:
+        raise ValueError("Empty code path")
+
+    if os.path.isabs(raw_path):
+        raise ValueError(f"Absolute paths are not allowed: {raw_path}")
+
+    if workspace_mode == "external_project_root" and workspace_root_name:
+        prefix = f"{workspace_root_name}/"
+        if normalized.startswith(prefix):
+            logger.warning(
+                "Code path includes workspace root slug prefix '%s'. Normalized to '%s'.",
+                prefix,
+                normalized[len(prefix):],
+            )
+            normalized = normalized[len(prefix):]
+
+    candidate = Path(normalized)
+    if any(part == ".." for part in candidate.parts):
+        raise ValueError(f"Path traversal is not allowed: {raw_path}")
+    if normalized in ("", "."):
+        raise ValueError(f"Invalid normalized path: {raw_path}")
+    return normalized
+
+
 def write_code_blocks(
     code_blocks: list[dict[str, str]],
     workspace_dir: str | Path,
+    workspace_root_name: str | None = None,
+    workspace_mode: str = "internal_run_workspace",
 ) -> list[Path]:
     """Write pre-extracted code blocks to disk.
 
@@ -145,7 +180,15 @@ def write_code_blocks(
 
     written: list[Path] = []
     for entry in code_blocks:
-        rel_path = _strip_workspace_prefix(entry["path"])
+        try:
+            rel_path = normalize_code_path(
+                entry["path"],
+                workspace_root_name=workspace_root_name,
+                workspace_mode=workspace_mode,
+            )
+        except ValueError as exc:
+            logger.error("Invalid code path '%s': %s", entry["path"], exc)
+            continue
         content = entry["content"]
 
         try:

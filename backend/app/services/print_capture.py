@@ -20,7 +20,10 @@ _thread_local = threading.local()
 
 # Type aliases for callbacks
 EventEmitter = Callable[[RunEvent], None]
-ArtifactSaver = Callable[[int, str, str, str, list[dict[str, str]]], None]
+ArtifactSaver = Callable[
+    [int, str, str, str | None, str | None, list[dict[str, str]] | None],
+    None,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +75,6 @@ def get_cancel_event() -> threading.Event | None:
 def get_artifact_saver() -> ArtifactSaver | None:
     """Get the artifact saver callback for the current thread (if any).
 
-    Signature: (iteration_num, agent_id, artifact_type, artifact_yaml, code_blocks) -> None
+    Signature: (iteration_num, agent_id, output_name, artifact_yaml, report_body, code_blocks) -> None
     """
     return getattr(_thread_local, "artifact_saver", None)
