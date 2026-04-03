@@ -77,7 +77,10 @@ class PipelineStepInput(BaseModel):
 
     agent: str = Field(..., description="Agent ID (e.g. 'ReqAgent', 'ValidatorAgent')")
     model: str | None = Field(None, description="LLM model override (e.g. 'claude-sonnet-4-6')")
-    provider: str | None = Field(None, description="LLM provider override: anthropic|google|openai")
+    provider: str | None = Field(
+        None,
+        description="LLM provider override: anthropic|google|openai|ollama",
+    )
     mode: str | None = Field(None, description="TestAgent only: 'design' or 'execution'")
     max_tokens: int = Field(8192, ge=1024, le=65536, description="Max output tokens for this step")
 

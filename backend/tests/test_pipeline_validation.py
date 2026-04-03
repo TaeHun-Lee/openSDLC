@@ -92,6 +92,15 @@ class TestValidatePipelineRuntime:
         api_warnings = [w for w in result.warnings if w.type == "api_key_missing"]
         assert len(api_warnings) == 0
 
+    def test_ollama_provider_no_api_key_warning(self):
+        """Ollama is a local provider and should not require an API key."""
+        pipeline = self._make_pipeline([
+            StepDefinition(step=1, agent="ReqAgent", provider="ollama"),
+        ], max_iterations=1)
+        result = validate_pipeline_runtime(pipeline)
+        api_warnings = [w for w in result.warnings if w.type == "api_key_missing"]
+        assert len(api_warnings) == 0
+
     def test_unreachable_rework_target_is_error(self):
         """on_fail pointing to an agent not in preceding steps should be an error."""
         pipeline = self._make_pipeline([

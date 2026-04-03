@@ -1,6 +1,6 @@
 """Provider-agnostic LLM client for OpenSDLC.
 
-Supports Anthropic (Claude), Google (Gemini), and OpenAI (GPT).
+Supports Anthropic (Claude), Google (Gemini), OpenAI (GPT), and Ollama.
 Provider is selected via OPENSDLC_LLM_PROVIDER env var or config defaults.
 Includes automatic retry with backoff for rate-limit (429) errors.
 Detects daily quota exhaustion and provides clear error messages.
@@ -11,20 +11,23 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
+
+import httpx
 
 from app.core.config import (
     get_anthropic_api_key,
     get_google_api_key,
     get_llm_provider,
     get_model,
+    get_ollama_base_url,
     get_openai_api_key,
 )
 
 logger = logging.getLogger(__name__)
 
-Provider = Literal["anthropic", "google", "openai"]
+Provider = Literal["anthropic", "google", "openai", "ollama"]
 
 
 @dataclass(frozen=True)
@@ -210,10 +213,42 @@ def _call_openai(system: str, user_message: str, model: str, max_tokens: int) ->
     )
 
 
+def _call_ollama(system: str, user_message: str, model: str, max_tokens: int) -> LLMResponse:
+    response = httpx.post(
+        f"{get_ollama_base_url()}/api/chat",
+        json={
+            "model": model,
+            "stream": False,
+            "options": {"num_predict": max_tokens},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message},
+            ],
+        },
+        timeout=300.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    message = data.get("message") or {}
+    text = message.get("content")
+    if text is None:
+        logger.warning("[LLM] Ollama API returned None content (model=%s)", model)
+        text = ""
+
+    return LLMResponse(
+        text=text,
+        model=data.get("model", model),
+        provider="ollama",
+        input_tokens=data.get("prompt_eval_count"),
+        output_tokens=data.get("eval_count"),
+    )
+
+
 _PROVIDERS: dict[Provider, callable] = {
     "anthropic": _call_anthropic,
     "google": _call_google,
     "openai": _call_openai,
+    "ollama": _call_ollama,
 }
 
 
@@ -308,7 +343,7 @@ def call_llm(
                             f"The free tier limit has been reached. Options:\n"
                             f"  1. Wait ~{delay:.0f}s and retry\n"
                             f"  2. Switch to a different provider: "
-                            f"OPENSDLC_LLM_PROVIDER=anthropic|openai\n"
+                            f"OPENSDLC_LLM_PROVIDER=anthropic|openai|ollama\n"
                             f"  3. Upgrade to a paid API plan\n"
                             f"Partial pipeline output has been saved."
                         ),

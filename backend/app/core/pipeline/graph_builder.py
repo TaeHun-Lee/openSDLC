@@ -54,6 +54,9 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
     arbiter_node_id: str | None = None
     arbiter_possible_targets: dict[str, str] = {}  # node_id → node_id (edge key → target)
 
+    # gate_step_num → pass target node_id (accept_and_continue용)
+    gate_pass_targets: dict[int, str] = {}
+
     if arbiter_gates:
         from app.core.executor.generic_agent import create_arbiter_node
 
@@ -73,6 +76,16 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
                 upstream_node = agent_to_node.get(gate_step.upstream_agent)
                 if upstream_node:
                     arbiter_possible_targets[upstream_node] = upstream_node
+
+            # accept_and_continue용: 각 gate의 pass target (다음 step) 수집
+            gate_idx = next(
+                (i for i, s in enumerate(steps) if s.step == gate_step.step), None
+            )
+            if gate_idx is not None and gate_idx < len(steps) - 1:
+                pass_node = node_ids[steps[gate_idx + 1].step]
+                gate_pass_targets[gate_step.step] = pass_node
+                arbiter_possible_targets[pass_node] = pass_node
+
         if iteration_start_node:
             arbiter_possible_targets[iteration_start_node] = iteration_start_node
         if pm_assessment_node:
@@ -86,7 +99,9 @@ def build_graph_from_definition(pipeline_def: PipelineDefinition) -> StateGraph:
             user_message_strategy="pm_arbiter",
         )
         arbiter_node_id = "pm_arbiter"
-        arbiter_node_fn = create_arbiter_node(arbiter_step, arbiter_possible_targets)
+        arbiter_node_fn = create_arbiter_node(
+            arbiter_step, arbiter_possible_targets, gate_pass_targets
+        )
         graph.add_node(arbiter_node_id, arbiter_node_fn)
 
     first_node = node_ids[steps[0].step]

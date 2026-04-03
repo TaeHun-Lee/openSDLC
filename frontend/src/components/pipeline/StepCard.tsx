@@ -76,6 +76,7 @@ export function StepCard({ id, index, step, onChange, onRemove }: StepCardProps)
               <SelectItem value="anthropic">Anthropic</SelectItem>
               <SelectItem value="google">Google</SelectItem>
               <SelectItem value="openai">OpenAI</SelectItem>
+              <SelectItem value="ollama">Ollama</SelectItem>
             </SelectContent>
           </Select>
         </div>

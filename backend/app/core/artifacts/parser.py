@@ -59,6 +59,44 @@ _TRUNCATED_CODE_BLOCK_RE = re.compile(
     r"```[^\n]*\n(?:(?!```)[\s\S])*$",
 )
 
+# 고립된 코드 펜스 열기 마커 (뒤에 내용 없이 줄 끝이거나 빈 줄만 남은 경우)
+_ORPHAN_FENCE_RE = re.compile(
+    r"^\s*```[^\n]*$",
+    re.MULTILINE,
+)
+
+
+# 코드 블럭 추출 시 제외할 파일 패턴
+_EXCLUDED_CODE_FILE_PATTERNS: list[str] = [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "node_modules/",
+    ".git/",
+    "__pycache__/",
+    "dist/",
+    "build/",
+    ".next/",
+    ".nuxt/",
+    ".env",
+]
+
+
+def _is_excluded_code_file(file_path: str) -> bool:
+    """Check if a file path matches any excluded pattern."""
+    normalized = file_path.replace("\\", "/").strip().strip("\"'")
+    for pattern in _EXCLUDED_CODE_FILE_PATTERNS:
+        if pattern.endswith("/"):
+            # 디렉토리 패턴: 경로의 어떤 세그먼트에도 매칭
+            if f"/{pattern}" in f"/{normalized}" or normalized.startswith(pattern):
+                return True
+        else:
+            # 파일명 패턴: basename이 정확히 일치
+            basename = normalized.rsplit("/", 1)[-1]
+            if basename == pattern:
+                return True
+    return False
+
 
 def extract_code_blocks_from_narrative(narrative: str) -> list[dict[str, str]]:
     """Extract code file blocks marked with ``<!-- FILE: path -->`` from narrative.
@@ -77,6 +115,13 @@ def extract_code_blocks_from_narrative(narrative: str) -> list[dict[str, str]]:
         language = match.group(2).strip()
         content = match.group(3)
         if file_path and content:
+            if _is_excluded_code_file(file_path):
+                logger.info(
+                    "Skipping excluded file from code block extraction: '%s'",
+                    file_path,
+                )
+                matched_spans.append((match.start(), match.end()))
+                continue
             results.append({
                 "path": file_path,
                 "language": language,
@@ -94,6 +139,12 @@ def extract_code_blocks_from_narrative(narrative: str) -> list[dict[str, str]]:
         language = match.group(2).strip()
         content = match.group(3).rstrip()
         if file_path and content:
+            if _is_excluded_code_file(file_path):
+                logger.info(
+                    "Skipping excluded file from truncated code block extraction: '%s'",
+                    file_path,
+                )
+                continue
             logger.warning(
                 "Truncated code block detected for '%s' — extracting partial content (%d chars)",
                 file_path, len(content),
@@ -114,10 +165,12 @@ def strip_code_blocks_from_narrative(narrative: str) -> str:
     1. ``<!-- FILE: path -->`` 마커가 붙은 코드 블럭 (기존)
     2. 일반 코드 블럭 (`` ``` `` 로 열고 닫힌 완전한 블럭)
     3. 잘린 코드 블럭 (열린 `` ``` `` 는 있으나 닫는 `` ``` `` 이 없는 불완전 블럭)
+    4. 고립된 코드 펜스 마커 (`` ``` `` 만 남은 줄)
     """
     result = _FILE_BLOCK_RE.sub("", narrative)
     result = _BARE_CODE_BLOCK_RE.sub("", result)
     result = _TRUNCATED_CODE_BLOCK_RE.sub("", result)
+    result = _ORPHAN_FENCE_RE.sub("", result)
     return result.strip()
 
 
@@ -286,6 +339,28 @@ def parse_artifact_checked(response_text: str, strict: bool = False) -> ParsedAr
             # 코드 블록만 있는 경우는 "mixed" 위반으로 보지 않는다.
             stripped = strip_code_blocks_from_narrative(narrative)
             if stripped.strip():
+                # narrative 텍스트가 남아있지만 artifact YAML은 유효할 수 있다.
+                # artifact를 파싱 시도하여 유효하면 경고만 남기고 통과시킨다.
+                try:
+                    data = yaml.safe_load(artifact_yaml)
+                    if isinstance(data, dict) and "artifact_id" in data:
+                        logger.warning(
+                            "Narrative text found alongside YAML artifact (strict mode). "
+                            "Artifact YAML is structurally valid — accepting with warning. "
+                            "Narrative prefix (%d chars): %s",
+                            len(stripped.strip()),
+                            stripped.strip()[:100],
+                        )
+                        return {
+                            "data": data,
+                            "raw_yaml": artifact_yaml,
+                            "valid": True,
+                            "error": "",
+                            "recovered": True,
+                        }
+                except yaml.YAMLError:
+                    pass
+                # YAML 자체가 파싱 불가하면 기존처럼 거부
                 return {
                     "data": None,
                     "raw_yaml": artifact_yaml,

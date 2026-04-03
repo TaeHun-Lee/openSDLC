@@ -5,7 +5,8 @@ steps:
   # Step 1: PMAgent — 사용자 요청 접수 및 프로젝트 초기화
   - step: 1
     agent: PMAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     output_mode: narrative_only
     user_message_strategy: pm_initializer
     extra_mandate_files:
@@ -14,13 +15,15 @@ steps:
   # Step 2: ReqAgent — 요구사항 명세화 (UseCaseModelArtifact)
   - step: 2
     agent: ReqAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     output_mode: yaml_artifact
 
   # Step 3: ValidatorAgent (UC) — 요구사항 아티팩트 검증
   - step: 3
     agent: ValidatorAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     on_fail: ReqAgent
     on_warning: __arbiter__
     on_max_retries: __arbiter__
@@ -30,14 +33,16 @@ steps:
   # Step 4: TestAgent (Design Mode) — 테스트 시나리오 설계 (TestDesignArtifact)
   - step: 4
     agent: TestAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     mode: design
     output_mode: yaml_artifact
 
   # Step 5: ValidatorAgent (TEST-DESIGN) — 테스트 설계 검증
   - step: 5
     agent: ValidatorAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     on_fail: TestAgent
     on_warning: __arbiter__
     on_max_retries: __arbiter__
@@ -47,7 +52,8 @@ steps:
   # Step 6: CodeAgent — 기능 구현 및 코드 생성 (ImplementationArtifact)
   - step: 6
     agent: CodeAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     output_mode: yaml_artifact
     max_tokens: 16384
     min_response_chars: 2000
@@ -55,7 +61,8 @@ steps:
   # Step 7: ValidatorAgent (IMPL) — 구현 결과 검증
   - step: 7
     agent: ValidatorAgent
-    model: gemini-2.5-flash
+    provider: ollama
+    model: gemma4:latest
     on_fail: CodeAgent
     on_warning: __arbiter__
     on_max_retries: __arbiter__

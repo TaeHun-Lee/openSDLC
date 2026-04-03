@@ -1,0 +1,9 @@
+{
+  "name": "opensdlc",
+  "private": true,
+  "scripts": {
+    "dev": "bash ./run_dev.sh",
+    "dev:backend": "bash -lc 'source ~/opensdlc-venv/bin/activate && cd backend && python run_server.py --reload'",
+    "dev:frontend": "npm --prefix frontend run dev"
+  }
+}

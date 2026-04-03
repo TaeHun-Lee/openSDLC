@@ -42,3 +42,21 @@ def helper():
 6. import, type hints, 에러 처리를 생략하지 마라.
 7. 코드 블록을 모두 출력한 후, 아티팩트 YAML을 ```yaml 펜스로 감싸서 출력하라.
 8. 아티팩트 YAML에는 `code_files` 필드를 절대 포함하지 마라. 템플릿에 정의된 필드만 사용하라.
+
+## 제외 파일 규칙 (MUST NOT OUTPUT)
+아래에 해당하는 파일은 절대로 코드 블록으로 출력하지 마라:
+- `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` — lock 파일은 패키지 매니저가 자동 생성한다.
+- `node_modules/` 하위 모든 파일
+- `.git/` 하위 모든 파일
+- 바이너리 파일 (이미지, 폰트, 컴파일된 바이너리 등)
+- `dist/`, `build/`, `__pycache__/`, `.next/`, `.nuxt/` 등 빌드 산출물 디렉토리
+- `.env` 파일 (보안상 출력 금지)
+
+이 파일들이 프로젝트에 필요한 경우, `runtime_info` 또는 `setup_instructions`에서 생성 명령어를 기술하라.
+예: "npm install 실행으로 package-lock.json 및 node_modules 생성"
+
+## 경로 규칙
+- 모든 파일 경로는 프로젝트 루트 기준 상대 경로만 사용하라.
+- `workspace/`, 프로젝트 폴더명(예: `test-server/`) 같은 상위 경로 접두사를 붙이지 마라.
+- 올바른 예: `src/index.js`, `package.json`
+- 잘못된 예: `workspace/test-server/src/index.js`, `/home/user/project/src/index.js`

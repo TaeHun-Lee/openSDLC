@@ -401,11 +401,17 @@ def create_agent_node(
         if resolved_output_mode == "yaml_artifact":
             narrative = strip_code_blocks_from_narrative(narrative)
         elif resolved_output_mode == "markdown_report" and report_body:
-            # 비어있지 않은 줄 중 처음 5줄을 요약으로 사용 (기존 3줄 → 5줄)
-            summary_lines = [line.strip() for line in report_body.splitlines() if line.strip()][:5]
-            narrative = "\n".join(summary_lines)
+            # report_body 전체를 narrative로 사용한다.
+            # 프론트엔드에서 접기/펼치기 등 UI 레벨로 표시 분량을 조절한다.
+            narrative = report_body.strip()
 
         # Terminal logging + narrative event
+        if not narrative and resolved_output_mode == "yaml_artifact":
+            # LLM이 YAML artifact만 반환하고 narrative를 쓰지 않은 경우
+            # 기본 narrative를 생성하여 프론트엔드에 step 진행 상황을 전달한다
+            mode_label = f" ({step.mode})" if step.mode else ""
+            narrative = f"[{step.agent}] {resolved_output_type}{mode_label} 생성 완료"
+
         if narrative:
             formatted = _format_narrative(narrative, step.agent)
             print(f"\n{formatted}")
@@ -485,7 +491,19 @@ def create_agent_node(
                 ))
         elif resolved_output_mode == "yaml_artifact":
             parsed_artifact = parse_artifact_checked(response.text, strict=True)
-            if not parsed_artifact["valid"]:
+            if parsed_artifact.get("recovered"):
+                # mixed 응답이었지만 YAML은 유효 → artifact 보존, 경고만 기록
+                structural_issues = ["Narrative mixed with artifact (recovered)"]
+                _emit(RunEvent(
+                    event_type=EventType.PIPELINE_WARNING,
+                    data={
+                        "agent_id": step.agent,
+                        "step_num": step.step,
+                        "iteration_num": state["iteration_count"],
+                        "message": f"[{step.agent}] Structural warning: narrative mixed with artifact (recovered — artifact preserved)",
+                    },
+                ))
+            elif not parsed_artifact["valid"]:
                 structural_issues = [parsed_artifact["error"]]
                 artifact_yaml = ""
                 _emit(RunEvent(
@@ -655,7 +673,7 @@ def create_agent_node(
 
 _PM_ARBITER_ACTION_RE = re.compile(
     r"ARBITER[_\s-]*ACTION\s*[:=\-]\s*[\"']?"
-    r"(retry_producer|retry_upstream|restart_iteration|end_iteration)"
+    r"(retry_producer|retry_upstream|restart_iteration|end_iteration|accept_and_continue)"
     r"[\"']?",
     re.IGNORECASE,
 )
@@ -664,7 +682,8 @@ _PM_ARBITER_ACTION_RE = re.compile(
 def _extract_arbiter_action(text: str) -> str:
     """Extract ARBITER_ACTION from PMAgent arbiter output.
 
-    Returns one of: retry_producer, retry_upstream, restart_iteration, end_iteration.
+    Returns one of: retry_producer, retry_upstream, restart_iteration,
+    end_iteration, accept_and_continue.
     Defaults to 'end_iteration' if not found.
     """
     m = _PM_ARBITER_ACTION_RE.search(text)
@@ -683,6 +702,7 @@ def _extract_arbiter_action(text: str) -> str:
 def create_arbiter_node(
     step: StepDefinition,
     possible_targets: dict[str, str],
+    gate_pass_targets: dict[int, str] | None = None,
 ) -> Callable[[PipelineState], dict]:
     """Factory: create PMAgent arbiter LangGraph node.
 
@@ -694,6 +714,8 @@ def create_arbiter_node(
     Args:
         step: StepDefinition for the arbiter (virtual step).
         possible_targets: dict of node_id → node_id for all valid routing targets.
+        gate_pass_targets: mapping of validator gate step_num → the node_id
+            that the gate would route to on "pass". Used by accept_and_continue.
     """
     agent_config = get_agent("PMAgent")
     system_prompt = build_system_prompt(agent_config, step)
@@ -735,7 +757,23 @@ def create_arbiter_node(
         # 결정된 action을 target node_id로 매핑
         target_node: str = ""
 
-        if action == "end_iteration":
+        if action == "accept_and_continue":
+            # 경고를 수용하고 해당 gate의 pass 경로(다음 step)로 진행
+            source_gate = state.get("pm_arbiter_source_gate", 0)
+            if gate_pass_targets and source_gate in gate_pass_targets:
+                target_node = gate_pass_targets[source_gate]
+            else:
+                logger.warning(
+                    "[PMAgent Arbiter] accept_and_continue but no pass target for gate %d — falling back to end_iteration logic",
+                    source_gate,
+                )
+                # fallback: end_iteration과 동일하게 pm_assessment_node로
+                for node_id in possible_targets:
+                    if "PMAgent" in node_id and node_id != "pm_arbiter":
+                        target_node = node_id
+                        break
+
+        elif action == "end_iteration":
             # pm_assessment_node를 찾는다 — possible_targets에서 PMAgent가 포함된 것
             for node_id in possible_targets:
                 if "PMAgent" in node_id and node_id != "pm_arbiter":

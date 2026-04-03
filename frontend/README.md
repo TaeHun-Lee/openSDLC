@@ -56,20 +56,32 @@ npm install
 
 ```bash
 # backend/.env
-OPENSDLC_LLM_PROVIDER=google          # google / anthropic / openai
+OPENSDLC_LLM_PROVIDER=google          # google / anthropic / openai / ollama
+OPENSDLC_MODEL=gemini-2.5-flash       # 예: gemma3 (ollama 사용 시)
 GOOGLE_API_KEY=your-key-here           # 선택한 프로바이더에 맞는 키
 # ANTHROPIC_API_KEY=your-key-here
 # OPENAI_API_KEY=your-key-here
+# OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 > LLM 키 없이도 프로젝트 관리, 파이프라인 편집, UI 탐색 등 대부분의 기능을 확인할 수 있다.
-> 실제 Run 실행만 LLM 키가 필요하다.
+> 실제 Run 실행만 LLM 연결이 필요하다. `ollama`를 쓰면 API 키 없이 로컬 모델을 사용할 수 있다.
 
 ---
 
 ## 2. 실행 방법
 
-**터미널 2개**를 열어 Backend와 Frontend를 각각 실행한다.
+가장 간단한 개발용 실행 방법은 프로젝트 루트에서 `npm run dev` 한 번으로 두 서버를 같이 띄우는 것이다.
+
+```bash
+cd /home/einzlth/Projects/openSDLC
+npm run dev
+```
+
+이 명령은 내부에서 Python 가상환경을 활성화한 뒤 Backend와 Frontend를 함께 실행한다.
+`Ctrl+C` 한 번으로 Backend와 Frontend가 함께 종료된다.
+
+필요하면 아래처럼 **터미널 2개**를 열어 Backend와 Frontend를 각각 실행해도 된다.
 
 ### 터미널 1: Backend (FastAPI, 포트 8000)
 
@@ -348,6 +360,7 @@ Frontend 자체에 환경변수는 없다. 모든 설정은 Backend 환경변수
 |------|--------|------|
 | `OPENSDLC_LLM_PROVIDER` | `google` | Health API에 표시되는 LLM 프로바이더 |
 | `OPENSDLC_MODEL` | 프로바이더 기본 | Health API에 표시되는 모델명 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | `ollama` provider 호출 대상 주소 |
 | `OPENSDLC_API_KEY` | (빈 문자열) | 비어 있으면 인증 비활성, 설정 시 X-API-Key 헤더 필요 |
 | `OPENSDLC_CORS_ORIGINS` | `*` | CORS 허용 오리진 (프로덕션에서 제한 필요) |
 | `OPENSDLC_DATA_DIR` | `backend/data` | DB 및 아티팩트 저장 경로 |

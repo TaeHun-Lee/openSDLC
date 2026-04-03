@@ -35,6 +35,7 @@ _DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "google": "gemini-2.5-flash",
     "openai": "gpt-4o",
+    "ollama": "gemma3",
 }
 
 
@@ -57,6 +58,10 @@ def get_google_api_key() -> str:
 
 def get_openai_api_key() -> str:
     return os.environ.get("OPENAI_API_KEY", "")
+
+
+def get_ollama_base_url() -> str:
+    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 
 
 def get_max_iterations() -> int:

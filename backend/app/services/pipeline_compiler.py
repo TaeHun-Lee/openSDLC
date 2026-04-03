@@ -21,7 +21,7 @@ from app.models.responses import (
     ValidationIssue,
 )
 
-_VALID_PROVIDERS = {"anthropic", "google", "openai"}
+_VALID_PROVIDERS = {"anthropic", "google", "openai", "ollama"}
 
 _PROVIDER_KEY_ENV = {
     "anthropic": "ANTHROPIC_API_KEY",
